@@ -1,0 +1,9 @@
+{
+  "name": "Maya - AI Executive Assistant",
+  "description": "A revolutionary, voice-first AI executive assistant with visual capabilities, memory context, and live canvas generation.",
+  "requestFramePermissions": [
+    "camera",
+    "microphone",
+    "geolocation"
+  ]
+}
