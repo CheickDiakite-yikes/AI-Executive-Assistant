@@ -73,3 +73,19 @@ export interface AgentPersona {
   voiceName: string;
   color: string;
 }
+
+export type ChatMessage =
+  | {
+      id: string;
+      role: 'user' | 'assistant' | 'system';
+      type: 'text';
+      text: string;
+      timestamp: number;
+    }
+  | {
+      id: string;
+      role: 'assistant';
+      type: 'canvas';
+      itemId: string;
+      timestamp: number;
+    };

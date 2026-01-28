@@ -1,12 +1,15 @@
 
 import React, { useState, useEffect, useRef } from 'react';
 import { GoogleGenAI, LiveServerMessage, Modality } from "@google/genai";
-import { Mic, Video, VideoOff, User, ArrowUp, X, RefreshCw, Send, FileText } from 'lucide-react';
+import { Mic, Video, VideoOff, User, ArrowUp, X, RefreshCw, Send, FileText, MessageSquare, Volume2, VolumeX } from 'lucide-react';
 import Canvas from './components/Canvas';
 import Visualizer from './components/Visualizer';
 import Settings from './components/Settings';
 import NotesView from './components/NotesView';
-import { CanvasItem, AgentState, AgentPersona, Note } from './types';
+import TextChat from './components/TextChat';
+import { CanvasItem, AgentState, AgentPersona, Note, ChatMessage } from './types';
+import { getPathForViewMode, getViewModeFromPath } from './utils/routing';
+import { trackEvent, trackError } from './utils/telemetry';
 import { GEMINI_MODEL, PERSONAS, getSystemInstruction } from './constants';
 import { toolsDeclaration, DUMMY_EMAILS, DUMMY_CALENDAR, generateMarketData } from './services/tools';
 
@@ -29,6 +32,15 @@ const arrayBufferToBase64 = (buffer: ArrayBuffer): string => {
     }
     return btoa(binary);
 };
+
+const makeId = () => {
+  if (typeof crypto !== 'undefined' && 'randomUUID' in crypto) {
+    return crypto.randomUUID();
+  }
+  return `msg-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+};
+
+type ViewMode = 'voice' | 'text';
 
 // Manual PCM decoding function
 // Gemini sends raw PCM 16-bit mono audio at 24kHz
@@ -62,6 +74,9 @@ export default function App() {
   const [canvasItems, setCanvasItems] = useState<CanvasItem[]>([]);
   const [notes, setNotes] = useState<Note[]>([]); // New Notes State
   const [volume, setVolume] = useState(0);
+  const [viewMode, setViewMode] = useState<ViewMode>('voice');
+  const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
+  const [isAudioMuted, setIsAudioMuted] = useState(false);
   const [showPersonaSelector, setShowPersonaSelector] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const [showNotes, setShowNotes] = useState(false); // New View State
@@ -80,6 +95,12 @@ export default function App() {
   const sourceRef = useRef<MediaStreamAudioSourceNode | null>(null);
   const videoIntervalRef = useRef<number | null>(null);
   const genAI = useRef<GoogleGenAI | null>(null);
+
+  const pendingAssistantTextRef = useRef<string>('');
+  const pendingAssistantTranscriptRef = useRef<string>('');
+  const pendingUserTranscriptRef = useRef<string>('');
+  const assistantTurnHasTextRef = useRef<boolean>(false);
+  const isAudioMutedRef = useRef<boolean>(false);
   
   // Refs to track state for stale closures in callbacks
   const notesRef = useRef<Note[]>([]); 
@@ -89,6 +110,7 @@ export default function App() {
   useEffect(() => {
     if (!process.env.API_KEY) {
       setErrorMsg("API Key missing. See metadata/instructions.");
+      trackEvent('api_key_missing', {}, 'warn');
     }
     genAI.current = new GoogleGenAI({ apiKey: process.env.API_KEY || '' });
     
@@ -101,6 +123,27 @@ export default function App() {
     };
   }, []);
 
+  useEffect(() => {
+    const initialMode = getViewModeFromPath(window.location.pathname);
+    setViewMode(initialMode);
+
+    const canonicalPath = getPathForViewMode(initialMode);
+    if (window.location.pathname !== canonicalPath) {
+      window.history.replaceState({}, '', canonicalPath);
+    }
+
+    trackEvent('route_init', { mode: initialMode, path: window.location.pathname });
+
+    const handlePopState = () => {
+      const mode = getViewModeFromPath(window.location.pathname);
+      setViewMode(mode);
+      trackEvent('route_pop', { mode, path: window.location.pathname });
+    };
+
+    window.addEventListener('popstate', handlePopState);
+    return () => window.removeEventListener('popstate', handlePopState);
+  }, []);
+
   // Sync state to refs for API callbacks
   useEffect(() => {
     notesRef.current = notes;
@@ -110,12 +153,116 @@ export default function App() {
     isCamOnRef.current = isCamOn;
   }, [isCamOn]);
 
+  useEffect(() => {
+    if (viewMode === 'text') setIsAudioMuted(true);
+    if (viewMode === 'voice') setIsAudioMuted(false);
+  }, [viewMode]);
+
+  useEffect(() => {
+    isAudioMutedRef.current = isAudioMuted;
+  }, [isAudioMuted]);
+
+  useEffect(() => {
+    if (viewMode === 'text') {
+      stopMicInput();
+      setAgentState(AgentState.IDLE);
+    } else if (viewMode === 'voice' && isConnected && sessionRef.current && !streamRef.current) {
+      startMicInput(sessionRef.current)
+        .then(() => setAgentState(AgentState.LISTENING))
+        .catch((e: any) => {
+          console.error("Mic start failed", e);
+          setErrorMsg("Could not access microphone.");
+        });
+    }
+  }, [viewMode, isConnected]);
+
+  const stopMicInput = () => {
+    if (sourceRef.current) sourceRef.current.disconnect();
+    if (processorRef.current) processorRef.current.disconnect();
+    if (streamRef.current) streamRef.current.getTracks().forEach(t => t.stop());
+    sourceRef.current = null;
+    processorRef.current = null;
+    streamRef.current = null;
+    setVolume(0);
+    trackEvent('mic_stop');
+  };
+
+  const startMicInput = async (session: any) => {
+    if (!inputContextRef.current || streamRef.current) return;
+    const ctx = inputContextRef.current;
+
+    if (ctx.state === 'suspended') {
+      await ctx.resume();
+    }
+
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    streamRef.current = stream;
+
+    const source = ctx.createMediaStreamSource(stream);
+    const processor = ctx.createScriptProcessor(4096, 1, 1);
+
+    processor.onaudioprocess = (e) => {
+      const inputData = e.inputBuffer.getChannelData(0);
+      
+      // Calculate volume for visualizer
+      let sum = 0;
+      for(let i=0; i<inputData.length; i++) sum += inputData[i] * inputData[i];
+      setVolume(Math.sqrt(sum / inputData.length) * 10);
+
+      // Convert Float32 to Int16 PCM
+      const pcmData = new Int16Array(inputData.length);
+      for (let i = 0; i < inputData.length; i++) {
+        let s = Math.max(-1, Math.min(1, inputData[i]));
+        pcmData[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
+      }
+
+      const base64Data = arrayBufferToBase64(pcmData.buffer);
+      session.sendRealtimeInput({ 
+          media: {
+              mimeType: 'audio/pcm;rate=16000',
+              data: base64Data
+          }
+      });
+    };
+
+    source.connect(processor);
+    processor.connect(ctx.destination);
+    
+    sourceRef.current = source;
+    processorRef.current = processor;
+    trackEvent('mic_start');
+  };
+
+  const navigateToMode = (mode: ViewMode) => {
+    const path = getPathForViewMode(mode);
+    if (window.location.pathname !== path) {
+      window.history.pushState({}, '', path);
+    }
+    setViewMode(mode);
+    trackEvent('route_change', { mode, path });
+  };
+
   // --- Gemini Live Connection Logic ---
-  const connectSession = async () => {
+  const connectSession = async ({ withMic = true }: { withMic?: boolean } = {}) => {
     if (!genAI.current) return null;
-    if (isConnected && sessionRef.current) return sessionRef.current;
+    if (isConnected && sessionRef.current) {
+      if (withMic && !streamRef.current) {
+        try {
+          await startMicInput(sessionRef.current);
+          setAgentState(AgentState.LISTENING);
+        } catch (e: any) {
+          console.error("Mic start failed", e);
+          setErrorMsg("Could not access microphone.");
+          trackError('mic_start_error', e);
+        }
+      }
+      return sessionRef.current;
+    }
 
     try {
+      const connectStart = performance.now();
+      trackEvent('session_connect_start', { withMic });
+
       // Resume audio context if suspended (browser policy)
       if (audioContextRef.current?.state === 'suspended') {
         await audioContextRef.current.resume();
@@ -124,19 +271,19 @@ export default function App() {
         await inputContextRef.current.resume();
       }
 
-      setAgentState(AgentState.LISTENING);
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      streamRef.current = stream;
+      setAgentState(withMic ? AgentState.LISTENING : AgentState.IDLE);
 
       const ai = genAI.current;
       
       const config = {
         model: GEMINI_MODEL,
         config: {
-            responseModalities: [Modality.AUDIO],
+            responseModalities: [Modality.AUDIO, Modality.TEXT],
             speechConfig: {
                 voiceConfig: { prebuiltVoiceConfig: { voiceName: activePersona.voiceName } }
             },
+            inputAudioTranscription: {},
+            outputAudioTranscription: {},
             systemInstruction: getSystemInstruction(activePersona.id),
             // Enable Custom Tools AND Google Search (for real-world grounding)
             tools: [
@@ -151,55 +298,72 @@ export default function App() {
         callbacks: {
           onopen: () => {
             console.log("Gemini Live Session Opened");
-            setIsConnected(true);
-            
-            connectPromise.then((session) => {
-                if (!inputContextRef.current) return;
-                const ctx = inputContextRef.current;
-                const source = ctx.createMediaStreamSource(stream);
-                const processor = ctx.createScriptProcessor(4096, 1, 1);
-                
-                processor.onaudioprocess = (e) => {
-                  const inputData = e.inputBuffer.getChannelData(0);
-                  
-                  // Calculate volume for visualizer
-                  let sum = 0;
-                  for(let i=0; i<inputData.length; i++) sum += inputData[i] * inputData[i];
-                  setVolume(Math.sqrt(sum / inputData.length) * 10);
-
-                  // Convert Float32 to Int16 PCM
-                  const pcmData = new Int16Array(inputData.length);
-                  for (let i = 0; i < inputData.length; i++) {
-                    let s = Math.max(-1, Math.min(1, inputData[i]));
-                    pcmData[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
-                  }
-
-                  const base64Data = arrayBufferToBase64(pcmData.buffer);
-                  session.sendRealtimeInput({ 
-                      media: {
-                          mimeType: 'audio/pcm;rate=16000',
-                          data: base64Data
-                      }
-                  });
-                };
-
-                source.connect(processor);
-                processor.connect(ctx.destination);
-                
-                sourceRef.current = source;
-                processorRef.current = processor;
-            });
+            trackEvent('session_socket_open');
           },
           onmessage: async (msg: LiveServerMessage) => {
             console.log("Received message:", msg);
-            const audioData = msg.serverContent?.modelTurn?.parts?.[0]?.inlineData?.data;
+
+            const inputTranscription = msg.serverContent?.inputTranscription;
+            if (inputTranscription?.text) {
+              pendingUserTranscriptRef.current += inputTranscription.text;
+            }
+            if (inputTranscription?.finished) {
+              const finalUserText = pendingUserTranscriptRef.current.trim();
+              if (finalUserText) {
+                addUserMessage(finalUserText);
+                trackEvent('input_transcription_final', { length: finalUserText.length });
+              }
+              pendingUserTranscriptRef.current = '';
+            }
+
+            const outputTranscription = msg.serverContent?.outputTranscription;
+            if (outputTranscription?.text) {
+              pendingAssistantTranscriptRef.current += outputTranscription.text;
+            }
+            const textParts = msg.serverContent?.modelTurn?.parts;
+            if (textParts && Array.isArray(textParts)) {
+              for (const part of textParts) {
+                if (part && typeof part === 'object' && 'text' in part && part.text) {
+                  assistantTurnHasTextRef.current = true;
+                  pendingAssistantTextRef.current += part.text as string;
+                }
+              }
+            }
+
+            const modelParts = msg.serverContent?.modelTurn?.parts;
+            const audioData = modelParts?.find((part: any) => part?.inlineData?.data)?.inlineData?.data;
             if (audioData) {
               setAgentState(AgentState.SPEAKING);
               playAudioChunk(audioData);
             }
 
+            if (outputTranscription?.finished && !assistantTurnHasTextRef.current) {
+              const finalAssistantTranscript = pendingAssistantTranscriptRef.current.trim();
+              if (finalAssistantTranscript) {
+                addAssistantMessage(finalAssistantTranscript);
+                trackEvent('output_transcription_final', { length: finalAssistantTranscript.length });
+              }
+              pendingAssistantTranscriptRef.current = '';
+            }
+
             if (msg.serverContent?.turnComplete) {
-               setAgentState(AgentState.LISTENING);
+              const finalAssistantText = pendingAssistantTextRef.current.trim();
+              if (finalAssistantText) {
+                addAssistantMessage(finalAssistantText);
+                trackEvent('assistant_text_final', { length: finalAssistantText.length });
+              } else if (!assistantTurnHasTextRef.current) {
+                const finalAssistantTranscript = pendingAssistantTranscriptRef.current.trim();
+                if (finalAssistantTranscript) {
+                  addAssistantMessage(finalAssistantTranscript);
+                  trackEvent('output_transcription_final', { length: finalAssistantTranscript.length });
+                }
+              }
+
+              pendingAssistantTextRef.current = '';
+              pendingAssistantTranscriptRef.current = '';
+              assistantTurnHasTextRef.current = false;
+              setAgentState(AgentState.LISTENING);
+              trackEvent('turn_complete');
             }
 
             if (msg.toolCall) {
@@ -208,12 +372,15 @@ export default function App() {
           },
           onclose: () => {
             console.log("Session Closed");
+            stopMicInput();
             setIsConnected(false);
             setAgentState(AgentState.IDLE);
+            trackEvent('session_closed');
           },
           onerror: (err) => {
             console.error("Session Error", err);
             setErrorMsg("Connection error.");
+            trackError('session_error', err);
             disconnectSession();
           }
         }
@@ -221,30 +388,47 @@ export default function App() {
       
       const session = await connectPromise;
       sessionRef.current = session;
+      setIsConnected(true);
+      trackEvent('session_connect_success', { withMic, durationMs: Math.round(performance.now() - connectStart) });
+      if (withMic) {
+        try {
+          await startMicInput(session);
+        } catch (e: any) {
+          console.error("Mic start failed", e);
+          setErrorMsg("Could not access microphone.");
+          trackError('mic_start_error', e);
+        }
+      }
       return session;
 
     } catch (e: any) {
       console.error(e);
       setErrorMsg("Failed to connect: " + e.message);
       setAgentState(AgentState.IDLE);
+      trackError('session_connect_error', e, { withMic });
       return null;
     }
   };
 
   const disconnectSession = () => {
-    if (sourceRef.current) sourceRef.current.disconnect();
-    if (processorRef.current) processorRef.current.disconnect();
-    if (streamRef.current) streamRef.current.getTracks().forEach(t => t.stop());
+    stopMicInput();
     if (videoIntervalRef.current) clearInterval(videoIntervalRef.current);
     
     setIsConnected(false);
     setIsCamOn(false);
     setAgentState(AgentState.IDLE);
+    pendingAssistantTextRef.current = '';
+    pendingAssistantTranscriptRef.current = '';
+    pendingUserTranscriptRef.current = '';
+    assistantTurnHasTextRef.current = false;
+    sessionRef.current?.close?.();
     sessionRef.current = null;
+    trackEvent('session_disconnect');
   };
 
   const playAudioChunk = async (base64Audio: string) => {
     if (!audioContextRef.current) return;
+    if (isAudioMutedRef.current) return;
     try {
       const ctx = audioContextRef.current;
       const uint8Array = base64ToUint8Array(base64Audio);
@@ -261,6 +445,7 @@ export default function App() {
       nextStartTimeRef.current = startTime + audioBuffer.duration;
     } catch (e) {
       console.error("Audio decode error", e);
+      trackError('audio_decode_error', e);
     }
   };
 
@@ -275,6 +460,7 @@ export default function App() {
       
       const startTime = performance.now();
       console.log(`[${new Date().toISOString()}] 🛠️ START Tool: ${name}`, args);
+      trackEvent('tool_start', { name, id });
 
       try {
         if (name === 'display_email') {
@@ -477,10 +663,13 @@ export default function App() {
              result = { result: "Tool executed (fallback response)." };
         }
         
-        console.log(`[${new Date().toISOString()}] ✅ SUCCESS Tool: ${name} (${(performance.now() - startTime).toFixed(2)}ms)`);
+        const durationMs = Number((performance.now() - startTime).toFixed(2));
+        console.log(`[${new Date().toISOString()}] ✅ SUCCESS Tool: ${name} (${durationMs}ms)`);
+        trackEvent('tool_success', { name, id, durationMs });
 
       } catch (e: any) {
         console.error(`[${new Date().toISOString()}] ❌ ERROR Tool: ${name}`, e);
+        trackError('tool_error', e, { name, id });
         
         result = { 
             error: true, 
@@ -509,8 +698,27 @@ export default function App() {
     setAgentState(AgentState.SPEAKING);
   };
 
+  const addChatMessage = (message: ChatMessage) => {
+    setChatMessages(prev => [...prev, message]);
+  };
+
+  const addUserMessage = (text: string) => {
+    addChatMessage({ id: makeId(), role: 'user', type: 'text', text, timestamp: Date.now() });
+  };
+
+  const addAssistantMessage = (text: string) => {
+    addChatMessage({ id: makeId(), role: 'assistant', type: 'text', text, timestamp: Date.now() });
+  };
+
   const addCanvasItem = (item: CanvasItem) => {
     setCanvasItems(prev => [item, ...prev]);
+    addChatMessage({ id: makeId(), role: 'assistant', type: 'canvas', itemId: item.id, timestamp: item.timestamp });
+    trackEvent('canvas_item_added', { type: item.type, id: item.id });
+  };
+
+  const closeCanvasItem = (id: string) => {
+    setCanvasItems(prev => prev.filter(i => i.id !== id));
+    trackEvent('canvas_item_closed', { id });
   };
 
   const toggleCamera = async () => {
@@ -552,6 +760,7 @@ export default function App() {
         console.error("Camera error", e);
         setErrorMsg("Could not access camera.");
         setIsCamOn(false);
+        trackError('camera_error', e);
     }
   };
 
@@ -581,39 +790,48 @@ export default function App() {
   const sendTextToModel = (text: string) => {
     console.log("Attempting to send text:", text);
     if (sessionRef.current) {
-         // Using send with clientContent is the correct way for text turns in Live API
+         // Use sendClientContent for text turns in the Live API
          // Ensure turnComplete is true to trigger a response
-         sessionRef.current.send({ clientContent: { turns: [{ role: 'user', parts: [{ text }] }], turnComplete: true } })
-            .then(() => {
-                console.log("Text sent to session");
-                setAgentState(AgentState.THINKING);
-            })
-            .catch((error: any) => {
-                console.error("Error sending text to session:", error);
-                setErrorMsg("Failed to send text. Ensure connection is active.");
+         try {
+            trackEvent('text_send', { length: text.length });
+            sessionRef.current.sendClientContent({
+              turns: [{ role: 'user', parts: [{ text }] }],
+              turnComplete: true
             });
+            console.log("Text sent to session");
+            setAgentState(AgentState.THINKING);
+         } catch (error: any) {
+            console.error("Error sending text to session:", error);
+            setErrorMsg("Failed to send text. Ensure connection is active.");
+            trackError('text_send_error', error);
+         }
     } else {
         console.warn("No active session to send text.");
         setErrorMsg("Please connect (Mic button) before typing.");
+        trackEvent('text_send_no_session', { length: text.length }, 'warn');
     }
   };
 
   const handleSendText = async () => {
-    if (!textInput.trim()) return;
+    const message = textInput.trim();
+    if (!message) return;
     
     let session = sessionRef.current;
     if (!isConnected || !session) {
         console.log("Auto-connecting for text...");
         try {
-            session = await connectSession();
+            trackEvent('text_autoconnect');
+            session = await connectSession({ withMic: false });
         } catch (e) {
             console.error("Auto-connect failed", e);
+            trackError('text_autoconnect_error', e);
             return;
         }
     }
 
     if (session) {
-        sendTextToModel(textInput); 
+        addUserMessage(message);
+        sendTextToModel(message);
         setTextInput("");
     }
   };
@@ -621,23 +839,51 @@ export default function App() {
   const handleCanvasAction = (action: string, data: any) => {
      if (!sessionRef.current) {
         setErrorMsg("Agent not connected. Please connect first.");
+        trackEvent('canvas_action_no_session', { action }, 'warn');
         return;
      }
 
      if (action === 'reply') {
+        trackEvent('canvas_action', { action });
         sendTextToModel(`Draft a reply to this email from ${data.from}.`);
      }
      if (action === 'send_draft') {
+        trackEvent('canvas_action', { action });
         // Pass the body (which might be edited) to the model
-        sendTextToModel(`The draft is approved. Send the email to ${data.recipient} with the following body:\n"${data.body}"`);
+        sendTextToModel(`The draft is approved. Send the email to ${data.recipient} with the following body:\n\"${data.body}\"`);
      }
      if (action === 'discard_draft') {
+        trackEvent('canvas_action', { action });
         setCanvasItems(prev => prev.filter(i => i.type !== 'email-draft'));
         sendTextToModel(`I've discarded the draft email.`);
      }
      if (action === 'archive') {
+        trackEvent('canvas_action', { action });
         sendTextToModel(`Archive this email.`);
      }
+  };
+
+  const handleMicClick = async () => {
+    if (viewMode === 'text') {
+      navigateToMode('voice');
+    }
+    if (!isConnected) {
+      await connectSession({ withMic: true });
+      return;
+    }
+
+    if (!streamRef.current && sessionRef.current) {
+      try {
+        await startMicInput(sessionRef.current);
+        setAgentState(AgentState.LISTENING);
+      } catch (e: any) {
+        console.error("Mic start failed", e);
+        setErrorMsg("Could not access microphone.");
+      }
+      return;
+    }
+
+    disconnectSession();
   };
 
   return (
@@ -661,6 +907,32 @@ export default function App() {
         </div>
         <div className="flex items-center space-x-4">
            {isConnected && <span className="flex items-center text-[10px] font-bold tracking-widest text-amber-400 bg-amber-900/20 px-3 py-1 rounded-full border border-amber-500/30"><span className="w-1.5 h-1.5 bg-amber-400 rounded-full mr-2 animate-pulse"></span>LIVE</span>}
+           <button
+             onClick={() => navigateToMode(viewMode === 'voice' ? 'text' : 'voice')}
+             className={`w-12 h-12 rounded-full bg-black/40 flex items-center justify-center border transition-all cursor-pointer group ${viewMode === 'text' ? 'border-amber-500/60 bg-amber-900/20' : 'border-amber-500/20 hover:bg-amber-900/20 hover:border-amber-500/50'}`}
+             title={viewMode === 'voice' ? 'Switch to text mode' : 'Switch to voice mode'}
+           >
+             {viewMode === 'voice' ? (
+               <MessageSquare size={20} className="text-amber-100/60 group-hover:text-amber-400 transition-colors" />
+             ) : (
+               <Mic size={20} className="text-amber-100/60 group-hover:text-amber-400 transition-colors" />
+             )}
+           </button>
+           <button
+             onClick={() => setIsAudioMuted(prev => {
+               const next = !prev;
+               trackEvent('audio_mute_toggle', { muted: next });
+               return next;
+             })}
+             className={`w-12 h-12 rounded-full bg-black/40 flex items-center justify-center border transition-all cursor-pointer group ${isAudioMuted ? 'border-red-500/50 bg-red-900/20' : 'border-amber-500/20 hover:bg-amber-900/20 hover:border-amber-500/50'}`}
+             title={isAudioMuted ? 'Unmute audio' : 'Mute audio'}
+           >
+             {isAudioMuted ? (
+               <VolumeX size={20} className="text-red-300/80 group-hover:text-red-200 transition-colors" />
+             ) : (
+               <Volume2 size={20} className="text-amber-100/60 group-hover:text-amber-400 transition-colors" />
+             )}
+           </button>
            <button onClick={() => setShowNotes(true)} className="w-12 h-12 rounded-full bg-black/40 flex items-center justify-center border border-amber-500/20 hover:bg-amber-900/20 hover:border-amber-500/50 transition-all cursor-pointer group">
               <FileText size={20} className="text-amber-100/60 group-hover:text-amber-400 transition-colors" />
            </button>
@@ -670,22 +942,37 @@ export default function App() {
         </div>
       </div>
 
-      {/* Main Visualizer */}
-      <div className="relative z-10 flex-1 flex flex-col items-center justify-center w-full">
-         <Visualizer state={agentState} volume={volume} persona={activePersona} />
-         {!isConnected && (
-           <div className="mt-12 text-center px-6 animate-in fade-in slide-in-from-bottom-4 duration-1000">
-             <h1 className="text-4xl md:text-5xl font-light text-amber-50 mb-4 tracking-wider drop-shadow-2xl font-serif">MAYA</h1>
-             <p className="text-amber-200/40 text-sm tracking-[0.2em] uppercase">The Golden Age of Intelligence</p>
-           </div>
-         )}
-      </div>
+      {/* Main Area */}
+      {viewMode === 'voice' ? (
+        <div className="relative z-10 flex-1 flex flex-col items-center justify-center w-full">
+           <Visualizer state={agentState} volume={volume} persona={activePersona} />
+           {!isConnected && (
+             <div className="mt-12 text-center px-6 animate-in fade-in slide-in-from-bottom-4 duration-1000">
+               <h1 className="text-4xl md:text-5xl font-light text-amber-50 mb-4 tracking-wider drop-shadow-2xl font-serif">MAYA</h1>
+               <p className="text-amber-200/40 text-sm tracking-[0.2em] uppercase">The Golden Age of Intelligence</p>
+             </div>
+           )}
+        </div>
+      ) : (
+        <div className="relative z-10 flex-1 flex flex-col w-full">
+          <TextChat
+            messages={chatMessages}
+            items={canvasItems}
+            assistantName={activePersona.name}
+            assistantColor={activePersona.color}
+            onAction={handleCanvasAction}
+            onCloseItem={closeCanvasItem}
+          />
+        </div>
+      )}
 
-      <Canvas 
-         items={canvasItems} 
-         onClose={(id) => setCanvasItems(prev => prev.filter(i => i.id !== id))} 
-         onAction={handleCanvasAction}
-      />
+      {viewMode === 'voice' && (
+        <Canvas
+          items={canvasItems}
+          onClose={closeCanvasItem}
+          onAction={handleCanvasAction}
+        />
+      )}
 
       {/* Persona Modal */}
       {showPersonaSelector && (
@@ -750,9 +1037,8 @@ export default function App() {
                 type="text" 
                 value={textInput}
                 onChange={(e) => setTextInput(e.target.value)}
-                placeholder={isConnected ? "Command the oracle..." : "Connect to speak..."}
+                placeholder={isConnected ? "Command the oracle..." : "Type to connect or press mic..."}
                 className="bg-transparent w-full text-sm text-amber-50 placeholder-amber-500/20 focus:outline-none font-medium tracking-wide"
-                disabled={!isConnected}
                 onKeyDown={(e) => e.key === 'Enter' && handleSendText()}
               />
               {textInput && <button onClick={handleSendText} className="text-amber-500 hover:text-amber-300 transition-colors"><Send size={18}/></button>}
@@ -767,7 +1053,7 @@ export default function App() {
              <button onClick={toggleCamera} className={`w-12 h-12 rounded-full flex items-center justify-center transition-all duration-300 ${isCamOn ? 'bg-amber-100 text-black shadow-[0_0_20px_rgba(255,255,255,0.3)]' : 'bg-white/5 hover:bg-white/10 text-amber-100/60 hover:text-amber-100'}`}>
                {isCamOn ? <Video size={20} /> : <VideoOff size={20} />}
              </button>
-             <button onClick={isConnected ? disconnectSession : connectSession} className={`w-14 h-14 rounded-full flex items-center justify-center transition-all duration-500 transform hover:scale-105 active:scale-95 shadow-lg ${isConnected ? 'bg-gradient-to-br from-red-600 to-red-800 text-white shadow-red-900/50' : 'bg-gradient-to-br from-amber-400 to-amber-600 text-black shadow-amber-900/50'}`}>
+             <button onClick={handleMicClick} className={`w-14 h-14 rounded-full flex items-center justify-center transition-all duration-500 transform hover:scale-105 active:scale-95 shadow-lg ${isConnected ? 'bg-gradient-to-br from-red-600 to-red-800 text-white shadow-red-900/50' : 'bg-gradient-to-br from-amber-400 to-amber-600 text-black shadow-amber-900/50'}`}>
                <Mic size={24} className={isConnected ? "animate-pulse" : ""} />
              </button>
            </div>
