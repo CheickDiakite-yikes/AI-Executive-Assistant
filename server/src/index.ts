@@ -28,9 +28,9 @@ app.use('/api/telemetry', telemetryRouter);
 app.use(notFoundHandler);
 app.use(errorHandler);
 
-app.listen(PORT, 'localhost', () => {
-  logger.info({ port: PORT }, `Maya API server running on http://localhost:${PORT}`);
-  logger.info({ 
+app.listen(PORT, '0.0.0.0', () => {
+  logger.info({ port: PORT }, `Maya API server running on http://0.0.0.0:${PORT}`);
+  logger.info({
     geminiApiKey: process.env.GEMINI_API_KEY ? 'configured' : 'missing',
     databaseUrl: process.env.DATABASE_URL ? 'configured' : 'missing',
   }, 'Environment check');
