@@ -31,27 +31,247 @@ Choose the partner that matches your current goal:
 - **Nova**: The high-energy execution specialist.
 - **Zorra**: The empathetic "bestie" and executive partner.
 
-## 🛠️ Built with Google Technology
-Maya is architected from the ground up using the latest tools from the Google AI ecosystem:
-- **[Gemini API (@google/genai)](https://ai.google.dev/)**: Powering the core reasoning, multi-modal vision, and function calling.
-- **Gemini Live API**: Providing the low-latency real-time voice experience.
-- **Google Search Grounding**: Ensuring that market data and company intelligence are always up-to-date.
-
 ## 💻 Tech Stack
-- **Frontend**: React 19 + TypeScript
+- **Frontend**: React 19 + TypeScript + Vite
 - **Styling**: Tailwind CSS (Glassmorphism UI)
-- **Icons**: Lucide React
-- **API Client**: `@google/genai`
+- **Backend**: Express.js with TypeScript
+- **Database**: PostgreSQL with Drizzle ORM
+- **AI**: Google Gemini API (`@google/genai`)
+- **Logging**: Pino with structured logging
 
-## 🚦 Getting Started
-This project is designed to run in a controlled environment where the Gemini API is accessible. 
+---
 
-1. **Prerequisites**: Ensure you have a valid Google Gemini API Key.
-2. **Environment**: The application expects `process.env.API_KEY` to be configured.
-3. **Permissions**: The app requires Microphone and Camera permissions for full functionality.
+## 🛠️ Development Setup
 
-## 🤝 Open Source
-This project is open-source and built for the community. We believe the future of productivity is agentic, voice-first, and highly personal.
+### Prerequisites
+- Node.js 20+ 
+- PostgreSQL database (local or cloud)
+- Google Gemini API key
+
+### Environment Variables
+
+Create a `.env` file in the project root:
+
+```bash
+# Required
+GEMINI_API_KEY=your_gemini_api_key_here
+DATABASE_URL=postgresql://user:password@localhost:5432/maya
+
+# Optional (defaults shown)
+PORT=3001
+NODE_ENV=development
+```
+
+### Local Development
+
+```bash
+# 1. Install dependencies
+npm install
+
+# 2. Set up your environment variables
+cp .env.example .env
+# Edit .env with your values
+
+# 3. Push database schema
+npm run db:migrate
+
+# 4. Start development servers
+npm run dev
+```
+
+This starts:
+- **Frontend**: http://localhost:5000 (Vite dev server)
+- **Backend API**: http://localhost:3001
+
+### Available Scripts
+
+| Script | Description |
+|--------|-------------|
+| `npm run dev` | Start both frontend and backend in development mode |
+| `npm run dev:frontend` | Start only the Vite frontend server |
+| `npm run dev:server` | Start only the Express backend server |
+| `npm run build` | Build frontend for production |
+| `npm run typecheck` | Run TypeScript type checking |
+| `npm run db:migrate` | Push schema changes to database |
+| `npm run db:studio` | Open Drizzle Studio to browse database |
+
+---
+
+## 🏗️ Project Structure
+
+```
+/
+├── App.tsx                  # Main React application entry
+├── components/              # React UI components
+├── constants.ts             # App configuration and personas
+├── services/                # Frontend services (tools, API calls)
+├── types.ts                 # TypeScript type definitions
+├── utils/                   # Frontend utilities (routing, telemetry)
+├── server/
+│   └── src/
+│       ├── index.ts         # Express server entry point
+│       ├── db/              # Database schema and connection
+│       ├── middleware/      # Request logging, error handling
+│       ├── routes/          # API endpoints
+│       ├── services/        # Backend services (log persistence)
+│       └── utils/           # Logger, helpers
+├── vite.config.ts           # Vite configuration
+├── drizzle.config.ts        # Drizzle ORM configuration
+└── package.json
+```
+
+---
+
+## 🤝 Contributing
+
+We welcome contributions! Please follow these guidelines to ensure a smooth collaboration.
+
+### Getting Started
+
+1. **Fork the repository** and clone your fork locally
+2. **Create a feature branch**: `git checkout -b feature/your-feature-name`
+3. **Make your changes** following our code style guidelines
+4. **Test your changes** locally (both Replit and local environments)
+5. **Submit a pull request** with a clear description
+
+### Code Style Guidelines
+
+- Use TypeScript for all new code
+- Follow existing patterns in the codebase
+- Use meaningful variable and function names
+- Add JSDoc comments for exported functions
+- Keep components small and focused
+
+### Commit Messages
+
+Use clear, descriptive commit messages:
+```
+feat: add voice session persistence
+fix: resolve database connection timeout
+docs: update README with local setup instructions
+refactor: extract audio processing into separate service
+```
+
+### Testing Changes
+
+Before submitting a PR, ensure:
+
+1. **TypeScript compiles**: `npm run typecheck`
+2. **Frontend builds**: `npm run build`
+3. **App runs locally**: `npm run dev`
+4. **Database migrations work**: `npm run db:migrate`
+
+---
+
+## ⚠️ Replit vs Local Development
+
+This project supports both Replit and local development environments. Here are important differences to keep in mind:
+
+### Port Configuration
+
+| Environment | Frontend Port | Backend Port |
+|-------------|---------------|--------------|
+| Replit      | 5000          | 3001         |
+| Local       | 5000          | 3001         |
+
+**Important**: The frontend must always bind to port 5000 for Replit compatibility.
+
+### Database
+
+- **Replit**: Uses built-in PostgreSQL (Neon-backed). Connection string is auto-configured via `DATABASE_URL` secret.
+- **Local**: You must provide your own PostgreSQL instance and set `DATABASE_URL` in `.env`.
+
+### Environment Variables
+
+- **Replit**: Secrets are managed via the Secrets tab in the Replit UI. Never commit secrets.
+- **Local**: Use a `.env` file (which is gitignored).
+
+### Vite Configuration
+
+The `vite.config.ts` is configured to work in both environments:
+- Allows all hosts (required for Replit's proxy)
+- Proxies `/api` requests to the backend on port 3001
+
+**Do not modify these settings** unless you understand the implications for Replit:
+
+```typescript
+server: {
+  host: '0.0.0.0',
+  port: 5000,
+  allowedHosts: true,  // Required for Replit
+  proxy: {
+    '/api': 'http://localhost:3001'
+  }
+}
+```
+
+### What NOT to Change
+
+To maintain Replit compatibility:
+
+1. **Do not change the frontend port** from 5000
+2. **Do not remove `allowedHosts: true`** from Vite config
+3. **Do not use Docker** or containerization (not supported in Replit's Nix environment)
+4. **Do not hardcode localhost URLs** in frontend code that calls the backend - use relative paths (`/api/...`)
+
+---
+
+## 📊 Database Schema
+
+The PostgreSQL database includes these tables:
+
+| Table | Purpose |
+|-------|---------|
+| `users` | User accounts |
+| `user_settings` | User preferences and persona selection |
+| `conversations` | Chat conversation threads |
+| `messages` | Individual messages in conversations |
+| `notes` | User notes with tags and attachments |
+| `emails` | Email drafts, sent, and received emails |
+| `calendar_events` | Calendar entries |
+| `canvas_items` | Dynamic canvas content (charts, emails, images) |
+| `images` | Image metadata and storage |
+| `voice_sessions` | Voice conversation sessions |
+| `transcripts` | Voice transcripts |
+| `tool_executions` | AI tool execution logs |
+| `api_logs` | API request/response logs |
+| `error_logs` | Error tracking |
+
+### Making Schema Changes
+
+1. Edit `server/src/db/schema.ts`
+2. Run `npm run db:migrate` to push changes
+3. Test thoroughly before committing
+
+**Never change primary key types** on existing tables - this breaks migrations.
+
+---
+
+## 🔧 Troubleshooting
+
+### Frontend not loading in Replit
+
+1. Check that the workflow is running
+2. Verify Vite is binding to port 5000
+3. Ensure `allowedHosts: true` is in `vite.config.ts`
+
+### Database connection errors
+
+1. Verify `DATABASE_URL` is set correctly
+2. Check that PostgreSQL is running
+3. Run `npm run db:migrate` to ensure schema is up to date
+
+### Gemini API errors
+
+1. Verify `GEMINI_API_KEY` is set
+2. Check API key has proper permissions
+3. Ensure you're not exceeding rate limits
+
+---
+
+## 📄 License
+
+This project is open-source under the MIT License.
 
 ---
 

@@ -75,6 +75,7 @@ Maya supports multiple AI personas:
 - **Zorra** - Best friend energy
 
 ## Recent Changes
+- 2026-01-28: Updated README.md with comprehensive contribution guidelines and local development setup
 - 2026-01-28: Enhanced database schema with voice sessions, transcripts, tool executions, and error logs
 - 2026-01-28: Added log persistence to database for API requests and errors
 - 2026-01-28: Created telemetry API endpoint for frontend error reporting
@@ -84,3 +85,11 @@ Maya supports multiple AI personas:
 - Focus on proper logging and error tracking
 - Database-backed persistence for all features
 - Production-ready infrastructure
+
+## Contributing (Quick Reference)
+See README.md for full details. Key points:
+- Frontend binds to port 5000 (required for Replit)
+- Backend runs on port 3001
+- Do not modify `allowedHosts: true` in vite.config.ts
+- Use relative paths (`/api/...`) for backend calls, not localhost
+- Run `npm run typecheck` before submitting PRs
