@@ -112,7 +112,8 @@ export default function App() {
 
   // --- Gemini Live Connection Logic ---
   const connectSession = async () => {
-    if (!genAI.current || isConnected) return;
+    if (!genAI.current) return null;
+    if (isConnected && sessionRef.current) return sessionRef.current;
 
     try {
       // Resume audio context if suspended (browser policy)
@@ -190,6 +191,7 @@ export default function App() {
             });
           },
           onmessage: async (msg: LiveServerMessage) => {
+            console.log("Received message:", msg);
             const audioData = msg.serverContent?.modelTurn?.parts?.[0]?.inlineData?.data;
             if (audioData) {
               setAgentState(AgentState.SPEAKING);
@@ -217,12 +219,15 @@ export default function App() {
         }
       });
       
-      sessionRef.current = await connectPromise;
+      const session = await connectPromise;
+      sessionRef.current = session;
+      return session;
 
     } catch (e: any) {
       console.error(e);
       setErrorMsg("Failed to connect: " + e.message);
       setAgentState(AgentState.IDLE);
+      return null;
     }
   };
 
@@ -574,30 +579,41 @@ export default function App() {
   }, [isConnected, isCamOn]);
 
   const sendTextToModel = (text: string) => {
+    console.log("Attempting to send text:", text);
     if (sessionRef.current) {
-        if (typeof sessionRef.current.send === 'function') {
-             sessionRef.current.send({ clientContent: { turns: [{ role: 'user', parts: [{ text }] }], turnComplete: true } });
-             setAgentState(AgentState.THINKING);
-        } else {
-            console.warn("Text input is not supported in this session mode.");
-            addCanvasItem({
-                type: 'system-notification',
-                title: 'System Info',
-                content: { 
-                    level: 'info',
-                    message: 'Voice Only Mode',
-                    details: `Please speak your command: "${text}"` 
-                },
-                id: Date.now().toString(),
-                timestamp: Date.now()
+         // Using send with clientContent is the correct way for text turns in Live API
+         // Ensure turnComplete is true to trigger a response
+         sessionRef.current.send({ clientContent: { turns: [{ role: 'user', parts: [{ text }] }], turnComplete: true } })
+            .then(() => {
+                console.log("Text sent to session");
+                setAgentState(AgentState.THINKING);
+            })
+            .catch((error: any) => {
+                console.error("Error sending text to session:", error);
+                setErrorMsg("Failed to send text. Ensure connection is active.");
             });
-        }
+    } else {
+        console.warn("No active session to send text.");
+        setErrorMsg("Please connect (Mic button) before typing.");
     }
   };
 
-  const handleSendText = () => {
-    if (textInput.trim()) {
-        sendTextToModel(textInput);
+  const handleSendText = async () => {
+    if (!textInput.trim()) return;
+    
+    let session = sessionRef.current;
+    if (!isConnected || !session) {
+        console.log("Auto-connecting for text...");
+        try {
+            session = await connectSession();
+        } catch (e) {
+            console.error("Auto-connect failed", e);
+            return;
+        }
+    }
+
+    if (session) {
+        sendTextToModel(textInput); 
         setTextInput("");
     }
   };
@@ -625,27 +641,31 @@ export default function App() {
   };
 
   return (
-    <div className="relative w-full h-screen bg-black overflow-hidden flex flex-col items-center justify-between text-white selection:bg-amber-500/30">
+    <div className="relative w-full h-screen bg-[#050505] overflow-hidden flex flex-col items-center justify-between text-amber-50 selection:bg-amber-500/30 font-serif">
       
-      {/* Background Layers */}
-      <div className={`absolute inset-0 bg-gradient-to-b from-gray-900 via-gray-950 to-black transition-opacity duration-700 ${isCamOn ? 'opacity-0' : 'opacity-100'}`} />
+      {/* Background Layers - Ancient Egypt / Gold Theme */}
+      <div className={`absolute inset-0 bg-[radial-gradient(circle_at_center,_var(--tw-gradient-stops))] from-indigo-950/40 via-[#050505] to-[#000000] transition-opacity duration-700 ${isCamOn ? 'opacity-0' : 'opacity-100'}`} />
+      
+      {/* Subtle Texture Overlay */}
+      <div className="absolute inset-0 opacity-[0.03] pointer-events-none" style={{ backgroundImage: `url("data:image/svg+xml,%3Csvg width='60' height='60' viewBox='0 0 60 60' xmlns='http://www.w3.org/2000/svg'%3E%3Cg fill='none' fill-rule='evenodd'%3E%3Cg fill='%23d4af37' fill-opacity='1'%3E%3Cpath d='M36 34v-4h-2v4h-4v2h4v4h2v-4h4v-2h-4zm0-30V0h-2v4h-4v2h4v4h2V6h4V4h-4zM6 34v-4H4v4H0v2h4v4h2v-4h4v-2H6zM6 4V0H4v4H0v2h4v4h2V6h4V4H6z'/%3E%3C/g%3E%3C/g%3E%3C/svg%3E")` }}></div>
+
       <video ref={videoRef} autoPlay playsInline muted className={`absolute inset-0 w-full h-full object-cover transition-opacity duration-700 ${isCamOn ? 'opacity-100' : 'opacity-0 pointer-events-none'} ${cameraFacingMode === 'user' ? '-scale-x-100' : ''}`} />
       <canvas ref={canvasRef} className="hidden" />
 
       {/* Top Bar */}
-      <div className="absolute top-0 inset-x-0 z-30 p-6 flex justify-between items-start bg-gradient-to-b from-black/80 to-transparent">
-        <div onClick={() => setShowPersonaSelector(true)} className="flex items-center space-x-2 bg-white/10 backdrop-blur-md border border-white/10 rounded-full px-4 py-2 cursor-pointer hover:bg-white/20 transition-all">
-          <div className={`w-2 h-2 rounded-full ${activePersona.color} animate-pulse`}></div>
-          <span className="text-sm font-medium">{activePersona.name}</span>
-          <ArrowUp className="w-3 h-3 rotate-180 opacity-50" />
+      <div className="absolute top-0 inset-x-0 z-30 p-6 flex justify-between items-start bg-gradient-to-b from-black/90 to-transparent">
+        <div onClick={() => setShowPersonaSelector(true)} className="flex items-center space-x-2 bg-black/40 backdrop-blur-md border border-amber-500/30 rounded-full px-5 py-2 cursor-pointer hover:bg-amber-900/20 hover:border-amber-500/60 transition-all group">
+          <div className={`w-2 h-2 rounded-full ${activePersona.color} animate-pulse shadow-[0_0_10px_currentColor]`}></div>
+          <span className="text-sm font-medium tracking-widest text-amber-100 group-hover:text-amber-50">{activePersona.name.toUpperCase()}</span>
+          <ArrowUp className="w-3 h-3 rotate-180 opacity-50 text-amber-500" />
         </div>
         <div className="flex items-center space-x-4">
-           {isConnected && <span className="flex items-center text-xs text-green-400 bg-green-900/30 px-2 py-1 rounded-md border border-green-900/50"><span className="w-1.5 h-1.5 bg-green-400 rounded-full mr-1.5 animate-pulse"></span>LIVE</span>}
-           <button onClick={() => setShowNotes(true)} className="w-10 h-10 rounded-full bg-white/10 flex items-center justify-center border border-white/10 hover:bg-white/20 transition-all cursor-pointer group">
-              <FileText size={18} className="text-white/80 group-hover:text-amber-400 transition-colors" />
+           {isConnected && <span className="flex items-center text-[10px] font-bold tracking-widest text-amber-400 bg-amber-900/20 px-3 py-1 rounded-full border border-amber-500/30"><span className="w-1.5 h-1.5 bg-amber-400 rounded-full mr-2 animate-pulse"></span>LIVE</span>}
+           <button onClick={() => setShowNotes(true)} className="w-12 h-12 rounded-full bg-black/40 flex items-center justify-center border border-amber-500/20 hover:bg-amber-900/20 hover:border-amber-500/50 transition-all cursor-pointer group">
+              <FileText size={20} className="text-amber-100/60 group-hover:text-amber-400 transition-colors" />
            </button>
-           <button onClick={() => setShowSettings(true)} className="w-10 h-10 rounded-full bg-white/10 flex items-center justify-center border border-white/10 hover:bg-white/20 transition-all cursor-pointer">
-              <User size={18} />
+           <button onClick={() => setShowSettings(true)} className="w-12 h-12 rounded-full bg-black/40 flex items-center justify-center border border-amber-500/20 hover:bg-amber-900/20 hover:border-amber-500/50 transition-all cursor-pointer group">
+              <User size={20} className="text-amber-100/60 group-hover:text-amber-400 transition-colors" />
            </button>
         </div>
       </div>
@@ -654,9 +674,9 @@ export default function App() {
       <div className="relative z-10 flex-1 flex flex-col items-center justify-center w-full">
          <Visualizer state={agentState} volume={volume} persona={activePersona} />
          {!isConnected && (
-           <div className="mt-8 text-center px-6 animate-in fade-in slide-in-from-bottom-4 duration-700">
-             <h1 className="text-3xl font-light text-white/90 mb-2">Welcome back, Executive.</h1>
-             <p className="text-white/40">I'm ready to assist you.</p>
+           <div className="mt-12 text-center px-6 animate-in fade-in slide-in-from-bottom-4 duration-1000">
+             <h1 className="text-4xl md:text-5xl font-light text-amber-50 mb-4 tracking-wider drop-shadow-2xl font-serif">MAYA</h1>
+             <p className="text-amber-200/40 text-sm tracking-[0.2em] uppercase">The Golden Age of Intelligence</p>
            </div>
          )}
       </div>
@@ -669,42 +689,42 @@ export default function App() {
 
       {/* Persona Modal */}
       {showPersonaSelector && (
-         <div className="absolute inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-md animate-in fade-in duration-200">
-            <div className="w-full max-w-md bg-[#0f1115] border border-white/10 rounded-3xl shadow-2xl overflow-hidden animate-in zoom-in-95 duration-300">
-               <div className="p-6">
-                 <div className="flex justify-between items-center mb-6">
-                   <h2 className="text-xl font-medium text-white tracking-tight">Select Agent</h2>
+         <div className="absolute inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-xl animate-in fade-in duration-300">
+            <div className="w-full max-w-md bg-[#0a0a0a] border border-amber-500/20 rounded-3xl shadow-[0_0_50px_-10px_rgba(217,119,6,0.1)] overflow-hidden animate-in zoom-in-95 duration-300">
+               <div className="p-8">
+                 <div className="flex justify-between items-center mb-8">
+                   <h2 className="text-xl font-light text-amber-50 tracking-widest uppercase border-b border-amber-500/30 pb-2">Select Deity</h2>
                    <button onClick={() => setShowPersonaSelector(false)} className="w-8 h-8 flex items-center justify-center rounded-full bg-white/5 hover:bg-white/10 text-white/70 hover:text-white transition-colors">
                      <X size={18} />
                    </button>
                  </div>
 
-                 <div className="space-y-3">
+                 <div className="space-y-4">
                    {PERSONAS.map(p => {
                      const isSelected = activePersona.id === p.id;
                      return (
                       <button
                          key={p.id}
                          onClick={() => { setActivePersona(p); setShowPersonaSelector(false); }}
-                         className={`w-full group relative flex items-center p-4 rounded-2xl border transition-all duration-300 text-left ${
+                         className={`w-full group relative flex items-center p-5 rounded-xl border transition-all duration-500 text-left ${
                             isSelected 
-                              ? 'bg-white/5 border-amber-500/50 shadow-[0_0_30px_-10px_rgba(245,158,11,0.3)]' 
-                              : 'bg-[#1a1d24] border-transparent hover:border-white/10 hover:bg-[#20242c]'
+                              ? 'bg-amber-900/10 border-amber-500/60 shadow-[0_0_20px_-5px_rgba(245,158,11,0.2)]' 
+                              : 'bg-white/5 border-transparent hover:border-amber-500/20 hover:bg-white/10'
                          }`}
                       >
-                         <div className={`relative flex-shrink-0 w-12 h-12 rounded-full flex items-center justify-center mr-4 transition-all duration-300 ${
-                             isSelected ? 'bg-amber-500/20' : 'bg-white/5 group-hover:bg-white/10'
+                         <div className={`relative flex-shrink-0 w-12 h-12 rounded-full flex items-center justify-center mr-5 transition-all duration-500 ${
+                             isSelected ? 'bg-amber-500/20' : 'bg-white/5 group-hover:bg-amber-500/10'
                          }`}>
-                            <div className={`w-4 h-4 rounded-full transition-all duration-300 ${
-                               isSelected ? 'bg-amber-500 scale-110 shadow-[0_0_10px_rgba(245,158,11,0.5)]' : p.color
+                            <div className={`w-3 h-3 rounded-full transition-all duration-500 ${
+                               isSelected ? 'bg-amber-400 scale-125 shadow-[0_0_15px_rgba(251,191,36,0.8)]' : 'bg-white/20'
                             }`} />
                          </div>
 
                          <div className="flex-1">
-                            <h3 className={`font-medium text-lg mb-0.5 transition-colors ${isSelected ? 'text-white' : 'text-white/80 group-hover:text-white'}`}>
+                            <h3 className={`font-serif text-lg mb-1 transition-colors ${isSelected ? 'text-amber-100' : 'text-white/60 group-hover:text-amber-50'}`}>
                                {p.name}
                             </h3>
-                            <p className="text-sm text-white/40 leading-snug group-hover:text-white/50 transition-colors">
+                            <p className="text-xs text-white/30 leading-relaxed group-hover:text-white/40 transition-colors uppercase tracking-wide">
                                {p.description}
                             </p>
                          </div>
@@ -723,36 +743,36 @@ export default function App() {
       {showNotes && <NotesView notes={notes} onClose={() => setShowNotes(false)} />}
 
       {/* Controls */}
-      <div className="relative z-30 w-full max-w-lg px-6 pb-10">
-        <div className="glass rounded-3xl p-2 flex items-center justify-between shadow-2xl">
-           <div className="flex-1 px-4 flex items-center">
+      <div className="relative z-30 w-full max-w-lg px-6 pb-12">
+        <div className="bg-[#0a0a0a]/80 backdrop-blur-2xl border border-amber-500/10 rounded-full p-2 flex items-center justify-between shadow-[0_0_40px_-10px_rgba(0,0,0,0.5)]">
+           <div className="flex-1 px-6 flex items-center">
               <input 
                 type="text" 
                 value={textInput}
                 onChange={(e) => setTextInput(e.target.value)}
-                placeholder="Type instructions..." 
-                className="bg-transparent w-full text-sm text-white placeholder-white/30 focus:outline-none"
+                placeholder={isConnected ? "Command the oracle..." : "Connect to speak..."}
+                className="bg-transparent w-full text-sm text-amber-50 placeholder-amber-500/20 focus:outline-none font-medium tracking-wide"
                 disabled={!isConnected}
                 onKeyDown={(e) => e.key === 'Enter' && handleSendText()}
               />
-              {textInput && <button onClick={handleSendText} className="text-white/50 hover:text-white"><Send size={16}/></button>}
+              {textInput && <button onClick={handleSendText} className="text-amber-500 hover:text-amber-300 transition-colors"><Send size={18}/></button>}
            </div>
 
-           <div className="flex items-center space-x-2">
+           <div className="flex items-center space-x-3 pl-4 border-l border-white/5">
              {isCamOn && (
-               <button onClick={switchCamera} className="w-10 h-10 rounded-full flex items-center justify-center bg-white/10 hover:bg-white/20 text-white transition-all">
+               <button onClick={switchCamera} className="w-10 h-10 rounded-full flex items-center justify-center bg-white/5 hover:bg-white/10 text-amber-100/60 hover:text-amber-100 transition-all">
                   <RefreshCw size={16} />
                </button>
              )}
-             <button onClick={toggleCamera} className={`w-12 h-12 rounded-full flex items-center justify-center transition-all ${isCamOn ? 'bg-white text-black' : 'bg-white/5 hover:bg-white/10 text-white'}`}>
+             <button onClick={toggleCamera} className={`w-12 h-12 rounded-full flex items-center justify-center transition-all duration-300 ${isCamOn ? 'bg-amber-100 text-black shadow-[0_0_20px_rgba(255,255,255,0.3)]' : 'bg-white/5 hover:bg-white/10 text-amber-100/60 hover:text-amber-100'}`}>
                {isCamOn ? <Video size={20} /> : <VideoOff size={20} />}
              </button>
-             <button onClick={isConnected ? disconnectSession : connectSession} className={`w-14 h-14 rounded-full flex items-center justify-center transition-all transform hover:scale-105 active:scale-95 ${isConnected ? 'bg-red-500 text-white' : 'bg-white text-black'}`}>
-               <Mic size={24} />
+             <button onClick={isConnected ? disconnectSession : connectSession} className={`w-14 h-14 rounded-full flex items-center justify-center transition-all duration-500 transform hover:scale-105 active:scale-95 shadow-lg ${isConnected ? 'bg-gradient-to-br from-red-600 to-red-800 text-white shadow-red-900/50' : 'bg-gradient-to-br from-amber-400 to-amber-600 text-black shadow-amber-900/50'}`}>
+               <Mic size={24} className={isConnected ? "animate-pulse" : ""} />
              </button>
            </div>
         </div>
-        {errorMsg && <div className="absolute -top-16 left-0 right-0 mx-6 bg-red-500/90 text-white text-xs p-3 rounded-xl text-center backdrop-blur-md">{errorMsg} <button onClick={() => setErrorMsg(null)} className="ml-2 underline">Dismiss</button></div>}
+        {errorMsg && <div className="absolute -top-20 left-0 right-0 mx-6 bg-red-900/90 text-white text-xs p-4 rounded-2xl text-center backdrop-blur-md border border-red-500/30 shadow-xl">{errorMsg} <button onClick={() => setErrorMsg(null)} className="ml-2 underline font-bold">Dismiss</button></div>}
       </div>
     </div>
   );
