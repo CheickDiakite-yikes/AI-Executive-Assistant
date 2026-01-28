@@ -1,5 +1,6 @@
 import { Request, Response, NextFunction } from 'express';
 import { logger } from '../utils/logger';
+import { persistErrorLog } from '../services/logPersistence';
 
 export interface ApiError extends Error {
   statusCode?: number;
@@ -28,6 +29,20 @@ export function errorHandler(
       body: req.body,
     }
   }, `Unhandled error: ${err.message}`);
+  
+  persistErrorLog({
+    correlationId,
+    source: 'backend',
+    level: 'error',
+    message: err.message,
+    stack: err.stack,
+    context: {
+      method: req.method,
+      path: req.path,
+      statusCode,
+      details: err.details,
+    },
+  });
   
   res.status(statusCode).json({
     error: {

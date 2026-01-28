@@ -1,5 +1,6 @@
 import { Request, Response, NextFunction } from 'express';
 import { createCorrelationId, logApiRequest } from '../utils/logger';
+import { persistApiLog } from '../services/logPersistence';
 
 declare global {
   namespace Express {
@@ -26,6 +27,18 @@ export function requestLogger(req: Request, res: Response, next: NextFunction) {
       durationMs,
       correlationId
     );
+    
+    persistApiLog({
+      correlationId,
+      endpoint: req.path,
+      method: req.method,
+      statusCode: res.statusCode,
+      durationMs,
+      metadata: {
+        userAgent: req.headers['user-agent'],
+        query: req.query,
+      },
+    });
   });
   
   next();

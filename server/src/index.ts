@@ -7,6 +7,7 @@ import healthRouter from './routes/health';
 import notesRouter from './routes/notes';
 import canvasRouter from './routes/canvas';
 import conversationsRouter from './routes/conversations';
+import telemetryRouter from './routes/telemetry';
 
 const app = express();
 const PORT = parseInt(process.env.API_PORT || '3001', 10);
@@ -22,6 +23,7 @@ app.use('/api/health', healthRouter);
 app.use('/api/notes', notesRouter);
 app.use('/api/canvas', canvasRouter);
 app.use('/api/conversations', conversationsRouter);
+app.use('/api/telemetry', telemetryRouter);
 
 app.use(notFoundHandler);
 app.use(errorHandler);

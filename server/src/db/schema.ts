@@ -111,3 +111,49 @@ export const apiLogs = pgTable('api_logs', {
   metadata: jsonb('metadata').default({}),
   createdAt: timestamp('created_at').defaultNow().notNull(),
 });
+
+export const voiceSessions = pgTable('voice_sessions', {
+  id: uuid('id').defaultRandom().primaryKey(),
+  visitorId: varchar('visitor_id', { length: 100 }),
+  userId: uuid('user_id').references(() => users.id),
+  conversationId: uuid('conversation_id').references(() => conversations.id),
+  personaId: varchar('persona_id', { length: 50 }),
+  status: varchar('status', { length: 50 }).default('active'),
+  startedAt: timestamp('started_at').defaultNow().notNull(),
+  endedAt: timestamp('ended_at'),
+  metadata: jsonb('metadata').default({}),
+});
+
+export const transcripts = pgTable('transcripts', {
+  id: uuid('id').defaultRandom().primaryKey(),
+  voiceSessionId: uuid('voice_session_id').references(() => voiceSessions.id),
+  role: messageRoleEnum('role').notNull(),
+  content: text('content').notNull(),
+  confidence: integer('confidence'),
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+});
+
+export const toolExecutions = pgTable('tool_executions', {
+  id: uuid('id').defaultRandom().primaryKey(),
+  correlationId: varchar('correlation_id', { length: 100 }),
+  voiceSessionId: uuid('voice_session_id').references(() => voiceSessions.id),
+  conversationId: uuid('conversation_id').references(() => conversations.id),
+  toolName: varchar('tool_name', { length: 100 }).notNull(),
+  args: jsonb('args').default({}),
+  result: jsonb('result').default({}),
+  status: varchar('status', { length: 50 }).default('success'),
+  durationMs: integer('duration_ms'),
+  error: text('error'),
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+});
+
+export const errorLogs = pgTable('error_logs', {
+  id: uuid('id').defaultRandom().primaryKey(),
+  correlationId: varchar('correlation_id', { length: 100 }),
+  source: varchar('source', { length: 50 }).notNull(),
+  level: varchar('level', { length: 20 }).default('error'),
+  message: text('message').notNull(),
+  stack: text('stack'),
+  context: jsonb('context').default({}),
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+});
