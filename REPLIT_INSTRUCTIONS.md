@@ -27,7 +27,10 @@ npm run dev
 
 ## 4. Troubleshooting "Connection Refused"
 We have already verified that the server listens on `0.0.0.0` (required for Replit).
-- **Frontend**: Port 3000 (Vite)
+- **Frontend**: Port 5000 (Vite) - *This is the one you should see.*
 - **Backend**: Port 3001 (Express)
 
-If the WebView is blank, ensure Replit is exposing **Port 3000**.
+We configured `.replit` to automatically expose Port 5000. If you still see the backend JSON:
+1.  Open the **Webview** panel.
+2.  Change the address bar URL to port 5000 (e.g., `https://...-5000.app.github.dev` or similar).
+
