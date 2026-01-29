@@ -9,6 +9,10 @@ import notesRouter from './routes/notes';
 import canvasRouter from './routes/canvas';
 import conversationsRouter from './routes/conversations';
 import telemetryRouter from './routes/telemetry';
+import emailRouter from './routes/email';
+import calendarRouter from './routes/calendar';
+import marketRouter from './routes/market';
+import integrationsRouter from './routes/integrations';
 
 const app = express();
 const PORT = parseInt(process.env.API_PORT || '3001', 10);
@@ -25,6 +29,10 @@ app.use('/api/notes', notesRouter);
 app.use('/api/canvas', canvasRouter);
 app.use('/api/conversations', conversationsRouter);
 app.use('/api/telemetry', telemetryRouter);
+app.use('/api/email', emailRouter);
+app.use('/api/calendar', calendarRouter);
+app.use('/api/market', marketRouter);
+app.use('/api/integrations', integrationsRouter);
 
 app.use(notFoundHandler);
 app.use(errorHandler);

@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { __resetTelemetry, getTelemetryEvents, trackEvent, trackError } from '../utils/telemetry.js';
+import { __resetTelemetry, getTelemetryEvents, trackEvent, trackError, trackToolExecution } from '../utils/telemetry.js';
 
 globalThis.__MAYA_TELEMETRY_SILENT = true;
 
@@ -29,4 +29,13 @@ test('telemetry logs errors with details', () => {
   const events = getTelemetryEvents();
   assert.equal(events[0].level, 'error');
   assert.equal(events[0].name, 'bad_stuff');
+});
+
+test('telemetry tracks tool executions', () => {
+  __resetTelemetry();
+  trackToolExecution('display_email', { query: 'elon' }, { result: 'ok' }, 42);
+  const events = getTelemetryEvents();
+  assert.equal(events.length, 1);
+  assert.equal(events[0].name, 'tool_display_email');
+  assert.equal(events[0].level, 'info');
 });

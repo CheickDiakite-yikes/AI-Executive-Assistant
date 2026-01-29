@@ -1,14 +1,73 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { X, Mail, Calendar, ChevronRight, Shield, Bell, Zap, Cloud, Smartphone } from 'lucide-react';
+import { api } from '../services/api';
 
 interface SettingsProps {
   onClose: () => void;
 }
 
 export default function Settings({ onClose }: SettingsProps) {
-  const [gmailConnected, setGmailConnected] = useState(true);
-  const [gcalConnected, setGcalConnected] = useState(true);
+  const [integrationStatus, setIntegrationStatus] = useState({
+     provider: 'mock',
+     mode: 'mock',
+     googleConfigured: false,
+     gmailConnected: false,
+     calendarConnected: false,
+     connectedAt: null as number | null,
+  });
+  const [loadingIntegrations, setLoadingIntegrations] = useState(false);
+  const [integrationError, setIntegrationError] = useState<string | null>(null);
   const [notifications, setNotifications] = useState(true);
+
+  const refreshIntegrations = async () => {
+     setLoadingIntegrations(true);
+     try {
+        const status = await api.integrations.status();
+        setIntegrationStatus(status);
+        setIntegrationError(null);
+     } catch (err) {
+        setIntegrationError('Unable to reach integrations service.');
+     } finally {
+        setLoadingIntegrations(false);
+     }
+  };
+
+  useEffect(() => {
+     refreshIntegrations();
+     const onFocus = () => refreshIntegrations();
+     window.addEventListener('focus', onFocus);
+     return () => window.removeEventListener('focus', onFocus);
+  }, []);
+
+  const handleConnect = async () => {
+     setLoadingIntegrations(true);
+     setIntegrationError(null);
+     try {
+        const { authUrl } = await api.integrations.connectGoogle();
+        window.open(authUrl, '_blank', 'noopener,noreferrer');
+     } catch (err) {
+        setIntegrationError('Google OAuth is not configured yet.');
+     } finally {
+        setLoadingIntegrations(false);
+     }
+  };
+
+  const handleDisconnect = async () => {
+     setLoadingIntegrations(true);
+     setIntegrationError(null);
+     try {
+        await api.integrations.disconnectGoogle();
+        await refreshIntegrations();
+     } catch (err) {
+        setIntegrationError('Failed to disconnect. Try again.');
+     } finally {
+        setLoadingIntegrations(false);
+     }
+  };
+
+  const isGoogleMode = integrationStatus.provider === 'google';
+  const gmailConnected = integrationStatus.gmailConnected;
+  const gcalConnected = integrationStatus.calendarConnected;
 
   return (
     <div className="absolute inset-0 z-50 bg-black/95 backdrop-blur-xl animate-in slide-in-from-right duration-300 flex flex-col text-white">
@@ -48,7 +107,7 @@ export default function Settings({ onClose }: SettingsProps) {
               <section>
                  <h4 className="text-xs font-semibold text-white/40 uppercase tracking-wider mb-4 pl-2">Integrations</h4>
                  <div className="bg-white/5 border border-white/5 rounded-3xl overflow-hidden divide-y divide-white/5">
-                    {/* Gmail Toggle */}
+                    {/* Gmail */}
                     <div className="flex items-center justify-between p-4 hover:bg-white/5 transition-colors">
                        <div className="flex items-center space-x-4">
                           <div className="w-10 h-10 rounded-full bg-red-500/20 flex items-center justify-center text-red-400">
@@ -56,16 +115,29 @@ export default function Settings({ onClose }: SettingsProps) {
                           </div>
                           <div>
                               <div className="text-sm font-medium">Gmail</div>
-                              <div className="text-xs text-white/40">{gmailConnected ? 'Connected' : 'Sync your emails'}</div>
+                              <div className="text-xs text-white/40">
+                                 {isGoogleMode
+                                    ? (gmailConnected ? 'Connected' : 'Connect your Gmail inbox')
+                                    : 'Demo mode (mock data)'}
+                              </div>
                           </div>
                        </div>
-                       <label className="relative inline-flex items-center cursor-pointer">
-                          <input type="checkbox" checked={gmailConnected} onChange={() => setGmailConnected(!gmailConnected)} className="sr-only peer" />
-                          <div className="w-11 h-6 bg-gray-700 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-red-600"></div>
-                       </label>
+                       {isGoogleMode ? (
+                          <button
+                             onClick={gmailConnected ? handleDisconnect : handleConnect}
+                             disabled={loadingIntegrations}
+                             className={`px-4 py-2 text-xs font-semibold rounded-full transition-colors ${gmailConnected ? 'bg-red-500/20 text-red-300 hover:bg-red-500/30' : 'bg-white/10 text-white hover:bg-white/20'} ${loadingIntegrations ? 'opacity-60 cursor-not-allowed' : ''}`}
+                          >
+                             {gmailConnected ? 'Disconnect' : 'Connect'}
+                          </button>
+                       ) : (
+                          <div className="text-[10px] uppercase tracking-wider text-white/40 px-3 py-1 rounded-full bg-white/5 border border-white/10">
+                             Demo
+                          </div>
+                       )}
                     </div>
 
-                    {/* Google Calendar Toggle */}
+                    {/* Google Calendar */}
                     <div className="flex items-center justify-between p-4 hover:bg-white/5 transition-colors">
                        <div className="flex items-center space-x-4">
                           <div className="w-10 h-10 rounded-full bg-blue-500/20 flex items-center justify-center text-blue-400">
@@ -73,13 +145,22 @@ export default function Settings({ onClose }: SettingsProps) {
                           </div>
                           <div>
                               <div className="text-sm font-medium">Google Calendar</div>
-                              <div className="text-xs text-white/40">Sync events & meetings</div>
+                              <div className="text-xs text-white/40">
+                                 {isGoogleMode
+                                    ? (gcalConnected ? 'Connected' : 'Sync events & meetings')
+                                    : 'Demo mode (mock data)'}
+                              </div>
                           </div>
                        </div>
-                       <label className="relative inline-flex items-center cursor-pointer">
-                          <input type="checkbox" checked={gcalConnected} onChange={() => setGcalConnected(!gcalConnected)} className="sr-only peer" />
-                          <div className="w-11 h-6 bg-gray-700 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-blue-600"></div>
-                       </label>
+                       {isGoogleMode ? (
+                          <div className={`text-xs font-medium px-3 py-1 rounded-full ${gcalConnected ? 'bg-blue-500/20 text-blue-300' : 'bg-white/10 text-white/60'}`}>
+                             {gcalConnected ? 'Synced' : 'Not Connected'}
+                          </div>
+                       ) : (
+                          <div className="text-[10px] uppercase tracking-wider text-white/40 px-3 py-1 rounded-full bg-white/5 border border-white/10">
+                             Demo
+                          </div>
+                       )}
                     </div>
 
                     {/* Cloud/Files */}
@@ -96,6 +177,16 @@ export default function Settings({ onClose }: SettingsProps) {
                         <div className="text-xs text-white/30 font-medium px-3 py-1 bg-white/5 rounded-full">Coming Soon</div>
                     </div>
                  </div>
+                 {integrationError && (
+                    <div className="mt-3 px-4 py-2 text-xs text-red-300 bg-red-500/10 border border-red-500/20 rounded-xl">
+                       {integrationError}
+                    </div>
+                 )}
+                 {isGoogleMode && !integrationStatus.googleConfigured && (
+                    <div className="mt-3 px-4 py-2 text-xs text-amber-200/80 bg-amber-500/10 border border-amber-500/20 rounded-xl">
+                       Google OAuth is not configured. Add server env vars to enable live integrations.
+                    </div>
+                 )}
               </section>
 
               {/* General Settings */}

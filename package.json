@@ -17,7 +17,6 @@
     "db:studio": "drizzle-kit studio"
   },
   "dependencies": {
-    "@google/adk": "^0.2.4",
     "@google/genai": "^1.33.0",
     "cors": "^2.8.5",
     "dotenv": "^16.4.5",

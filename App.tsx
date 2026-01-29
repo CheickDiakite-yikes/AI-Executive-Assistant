@@ -9,7 +9,7 @@ import NotesView from './components/NotesView';
 import TextChat from './components/TextChat';
 import { CanvasItem, AgentState, AgentPersona, Note, ChatMessage } from './types';
 import { getPathForViewMode, getViewModeFromPath } from './utils/routing';
-import { trackEvent, trackError } from './utils/telemetry';
+import { trackEvent, trackError, trackToolExecution } from './utils/telemetry';
 import { GEMINI_MODEL, PERSONAS, getSystemInstruction } from './constants';
 import { toolsDeclaration, DUMMY_EMAILS, DUMMY_CALENDAR, generateMarketData } from './services/tools';
 import { api } from './services/api';
@@ -511,17 +511,26 @@ export default function App() {
       let result: any = { result: "Done" };
 
       const startTime = performance.now();
+      let toolError: Error | null = null;
       console.log(`[${new Date().toISOString()}] 🛠️ START Tool: ${name}`, args);
       trackEvent('tool_start', { name, id });
 
       try {
         if (name === 'display_email') {
-          const email = DUMMY_EMAILS.find(e => e.from.toLowerCase().includes(args.query.toLowerCase()) || e.subject.toLowerCase().includes(args.query.toLowerCase())) || DUMMY_EMAILS[0];
-          addCanvasItem({ type: 'email', title: email.subject, content: email, id: id, timestamp: Date.now() });
-          result = {
-            result: `Displayed email from ${email.from}.`,
-            email_content: {
-              from: email.from,
+          let email = null;
+          try {
+            email = await api.email.search(args.query);
+          } catch (e) {
+            trackError('email_search_error', e, { query: args.query });
+          }
+          if (!email) {
+            email = DUMMY_EMAILS.find(e => e.from.toLowerCase().includes(args.query.toLowerCase()) || e.subject.toLowerCase().includes(args.query.toLowerCase())) || DUMMY_EMAILS[0];
+          }
+            addCanvasItem({ type: 'email', title: email.subject, content: email, id: id, timestamp: Date.now() });
+            result = { 
+                result: `Displayed email from ${email.from}.`,
+                email_content: {
+                    from: email.from,
               subject: email.subject,
               body: email.body,
               date: "Today, 10:42 AM"
@@ -529,36 +538,62 @@ export default function App() {
           };
         }
         else if (name === 'draft_email') {
-          addCanvasItem({
-            type: 'email-draft',
-            title: "Drafting Email...",
-            content: { recipient: args.recipient, subject: args.subject, body: args.body },
-            id: id,
-            timestamp: Date.now()
+            try {
+              await api.email.draft(args.recipient, args.subject, args.body);
+            } catch (e) {
+              trackError('email_draft_error', e, { recipient: args.recipient });
+            }
+            addCanvasItem({ 
+               type: 'email-draft', 
+               title: "Drafting Email...", 
+               content: { recipient: args.recipient, subject: args.subject, body: args.body }, 
+               id: id, 
+               timestamp: Date.now() 
           });
           // Inform model it was displayed
           result = { result: "Draft displayed on canvas. Ask user for confirmation to send." };
         }
         else if (name === 'send_email') {
-          result = { result: `Email sent successfully to ${args.recipient}.` };
+            try {
+              await api.email.send(args.recipient, args.subject, args.body);
+            } catch (e) {
+              trackError('email_send_error', e, { recipient: args.recipient });
+              throw e;
+            }
+            result = { result: `Email sent successfully to ${args.recipient}.` };
         }
         else if (name === 'display_calendar') {
-          addCanvasItem({ type: 'calendar', title: "Today's Schedule", content: DUMMY_CALENDAR, id: id, timestamp: Date.now() });
-
-          // CRITICAL: Return the actual calendar data AND current time to the model so it can reason about availability
-          const now = new Date();
-          result = {
-            result: "Calendar displayed.",
-            current_date: now.toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' }),
-            current_time: now.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' }),
-            time_zone: Intl.DateTimeFormat().resolvedOptions().timeZone,
-            events: DUMMY_CALENDAR
-          };
+            let events = [];
+            try {
+              events = await api.calendar.list();
+            } catch (e) {
+              trackError('calendar_list_error', e);
+            }
+            const calendarEvents = events.length ? events : DUMMY_CALENDAR;
+            addCanvasItem({ type: 'calendar', title: "Today's Schedule", content: calendarEvents, id: id, timestamp: Date.now() });
+            
+            // CRITICAL: Return the actual calendar data AND current time to the model so it can reason about availability
+            const now = new Date();
+            result = { 
+                result: "Calendar displayed.",
+                current_date: now.toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' }),
+                current_time: now.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' }),
+                time_zone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+                events: calendarEvents 
+            };
         }
         else if (name === 'schedule_event') {
-          const newEvent = { title: args.title, time: args.time, location: "TBD", participants: [args.participants || "User"] };
-          addCanvasItem({ type: 'calendar', title: "Event Scheduled", content: [...DUMMY_CALENDAR, newEvent], id: id, timestamp: Date.now() });
-          result = { result: `Scheduled ${args.title} at ${args.time}` };
+            let updatedEvents = null;
+            try {
+              const response = await api.calendar.schedule({ title: args.title, time: args.time, participants: args.participants });
+              updatedEvents = response?.events || null;
+            } catch (e) {
+              trackError('calendar_schedule_error', e, { title: args.title });
+            }
+            const newEvent = { title: args.title, time: args.time, location: "TBD", participants: [args.participants || "User"] };
+            const events = updatedEvents || [...DUMMY_CALENDAR, newEvent];
+            addCanvasItem({ type: 'calendar', title: "Event Scheduled", content: events, id: id, timestamp: Date.now() });
+            result = { result: `Scheduled ${args.title} at ${args.time}` };
         }
         else if (name === 'generate_code') {
           addCanvasItem({ type: 'code', title: args.description, content: { code: args.code, language: args.language }, id: id, timestamp: Date.now() });
@@ -626,14 +661,20 @@ export default function App() {
           }
         }
         else if (name === 'find_notes_by_tag') {
-          const tag = args.tag.toLowerCase();
-          const found = notesRef.current.filter(n => n.tags?.some(t => t.toLowerCase() === tag));
-
+          let found = [];
+          try {
+            found = await api.getNotesByTag(args.tag);
+          } catch (e) {
+            trackError('notes_tag_search_error', e, { tag: args.tag });
+            const tag = args.tag.toLowerCase();
+            found = notesRef.current.filter(n => n.tags?.some(t => t.toLowerCase() === tag));
+          }
+          
           addCanvasItem({
-            type: 'note-search-results',
-            title: `Notes: #${args.tag}`,
-            content: { tag: args.tag, notes: found },
-            id: id,
+              type: 'note-search-results',
+              title: `Notes: #${args.tag}`,
+              content: { tag: args.tag, notes: found },
+              id: id,
             timestamp: Date.now()
           });
 
@@ -667,12 +708,20 @@ export default function App() {
           result = { result: "Web results displayed" };
         }
         else if (name === 'get_market_data') {
-          const marketData = generateMarketData(args.ticker);
+          let marketData = null;
+          try {
+            marketData = await api.market.get(args.ticker);
+          } catch (e) {
+            trackError('market_data_error', e, { ticker: args.ticker });
+          }
+          if (!marketData) {
+            marketData = generateMarketData(args.ticker);
+          }
           addCanvasItem({
-            type: 'financial-ticker',
-            title: `Market Pulse: ${args.ticker.toUpperCase()}`,
-            content: marketData,
-            id: id,
+              type: 'financial-ticker',
+              title: `Market Pulse: ${args.ticker.toUpperCase()}`,
+              content: marketData,
+              id: id,
             timestamp: Date.now()
           });
           result = { result: `Displayed market data for ${args.ticker}` };
@@ -710,14 +759,24 @@ export default function App() {
           });
 
           const noteContent = `STRATEGY MEMO: ${args.title}\n\nRISKS:\n${args.risks.map((r: string) => `- ${r}`).join('\n')}\n\nDECISIONS:\n${args.decisions.map((d: string) => `- ${d}`).join('\n')}\n\nACTION ITEMS:\n${args.actionItems.map((a: any) => `- [ ] ${a.task} (${a.assignee}) due ${a.dueDate}`).join('\n')}`;
-          const newNote: Note = {
-            id: `memo-${id}`,
-            title: args.title,
-            content: noteContent,
-            tags: ['strategy', 'meeting-notes'],
-            timestamp: Date.now()
-          };
-          setNotes(prev => [newNote, ...prev]);
+          try {
+            const createdNote = await api.createNote({
+              title: args.title,
+              content: noteContent,
+              tags: ['strategy', 'meeting-notes'],
+            });
+            setNotes(prev => [createdNote, ...prev]);
+          } catch (e) {
+            trackError('strategy_memo_persist_error', e, { title: args.title });
+            const newNote: Note = {
+              id: `memo-${id}`,
+              title: args.title,
+              content: noteContent,
+              tags: ['strategy', 'meeting-notes'],
+              timestamp: Date.now()
+            };
+            setNotes(prev => [newNote, ...prev]);
+          }
 
           result = { result: "Strategy memo created and saved." };
         }
@@ -729,8 +788,9 @@ export default function App() {
         const durationMs = Number((performance.now() - startTime).toFixed(2));
         console.log(`[${new Date().toISOString()}] ✅ SUCCESS Tool: ${name} (${durationMs}ms)`);
         trackEvent('tool_success', { name, id, durationMs });
-
+        trackToolExecution(name, args ?? {}, result ?? {}, durationMs);
       } catch (e: any) {
+        toolError = e instanceof Error ? e : new Error(String(e));
         console.error(`[${new Date().toISOString()}] ❌ ERROR Tool: ${name}`, e);
         trackError('tool_error', e, { name, id });
 
@@ -751,6 +811,8 @@ export default function App() {
           id: id,
           timestamp: Date.now()
         });
+        const durationMs = Number((performance.now() - startTime).toFixed(2));
+        trackToolExecution(name, args ?? {}, result ?? {}, durationMs, toolError.message);
       }
 
       responses.push({ name, id, response: result });

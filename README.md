@@ -78,6 +78,8 @@ Maya is a voice‑first executive assistant built on Google’s Gemini Live API.
 
 ## 🔐 Environment Variables
 
+### Frontend (Vite)
+
 Vite maps these into the frontend:
 
 ```
@@ -90,6 +92,23 @@ The app consumes:
 
 Both are set from `GEMINI_API_KEY` in `vite.config.ts`.
 
+### Server (API)
+
+```
+API_PORT=3001
+MAYA_INTEGRATIONS_PROVIDER=mock
+FRONTEND_URL=http://localhost:5173
+GOOGLE_OAUTH_CLIENT_ID=your_client_id
+GOOGLE_OAUTH_CLIENT_SECRET=your_client_secret
+GOOGLE_OAUTH_REDIRECT_URI=http://localhost:3001/api/integrations/google/callback
+GOOGLE_OAUTH_SCOPES=https://www.googleapis.com/auth/gmail.readonly,https://www.googleapis.com/auth/gmail.send,https://www.googleapis.com/auth/calendar
+```
+
+Notes:
+- `MAYA_INTEGRATIONS_PROVIDER` supports `mock`, `google`, or `auto` (defaults to `mock`).
+- Google OAuth env vars are required to connect Gmail/Calendar.
+- After OAuth, the server redirects to `FRONTEND_URL`.
+
 ---
 
 ## ▶️ Running Locally
@@ -101,6 +120,17 @@ npm run dev
 
 Open:
 - `http://localhost:5173` (or the port printed by Vite)
+
+---
+
+## 🔌 Connect Gmail & Google Calendar
+
+1) Set server env vars (`GOOGLE_OAUTH_CLIENT_ID`, `GOOGLE_OAUTH_CLIENT_SECRET`, `GOOGLE_OAUTH_REDIRECT_URI`).
+2) Start the API server (`npm run dev:server`) and the frontend (`npm run dev:frontend`).
+3) Open **Settings → Integrations → Connect** and complete Google OAuth.
+
+If `MAYA_INTEGRATIONS_PROVIDER=mock`, Maya stays in demo mode with safe mock data.
+OAuth tokens are stored in memory for now (server restart clears connections).
 
 ---
 

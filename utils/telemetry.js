@@ -11,10 +11,16 @@ const listeners = new Set();
 
 const root = typeof window !== 'undefined' ? window : globalThis;
 const shouldLog = () => !Boolean(root.__MAYA_TELEMETRY_SILENT || (typeof process !== 'undefined' && process?.env?.MAYA_TELEMETRY_SILENT === '1'));
+const shouldSendEvents = () => Boolean(root.__MAYA_TELEMETRY_SEND_EVENTS || (typeof process !== 'undefined' && process?.env?.MAYA_TELEMETRY_SEND_EVENTS === '1'));
 
-const API_BASE = typeof window !== 'undefined' 
-  ? `${window.location.protocol}//${window.location.hostname}:3001` 
-  : '';
+const resolveApiBase = () => {
+  if (typeof window !== 'undefined') {
+    return window.__MAYA_API_BASE || '';
+  }
+  return process.env.MAYA_API_BASE || 'http://localhost:3001';
+};
+
+const API_BASE = resolveApiBase();
 
 const sendToBackend = async (endpoint, data) => {
   if (typeof window === 'undefined') return;
@@ -87,6 +93,9 @@ export const trackEvent = (name, data, level = 'info') => {
     }
   }
   pushEvent(event);
+  if (shouldSendEvents()) {
+    sendToBackend('event', { name, data, level });
+  }
   return event.id;
 };
 

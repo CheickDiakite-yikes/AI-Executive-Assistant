@@ -100,3 +100,41 @@ test('Integration: Conversations Flow', { skip: !(await isServerRunning()) }, as
     assert.equal(messages.length, 1);
     assert.equal(messages[0].content, 'Hello World');
 });
+
+test('Integration: Email Search', { skip: !(await isServerRunning()) }, async () => {
+    const res = await fetch(`${API_BASE}/email/search?query=elon`);
+    assert.equal(res.status, 200);
+    const data = await res.json();
+    assert.ok(data.email);
+    assert.ok(Array.isArray(data.results));
+});
+
+test('Integration: Calendar List and Schedule', { skip: !(await isServerRunning()) }, async () => {
+    const listRes = await fetch(`${API_BASE}/calendar`);
+    assert.equal(listRes.status, 200);
+    const listData = await listRes.json();
+    assert.ok(Array.isArray(listData.events));
+
+    const createRes = await fetch(`${API_BASE}/calendar`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ title: 'Integration Sync', time: '03:00 PM - 03:30 PM' })
+    });
+    assert.equal(createRes.status, 201);
+    const created = await createRes.json();
+    assert.ok(created.event);
+});
+
+test('Integration: Market Data', { skip: !(await isServerRunning()) }, async () => {
+    const res = await fetch(`${API_BASE}/market/tsla`);
+    assert.equal(res.status, 200);
+    const data = await res.json();
+    assert.equal(data.ticker, 'TSLA');
+});
+
+test('Integration: Integrations Status', { skip: !(await isServerRunning()) }, async () => {
+    const res = await fetch(`${API_BASE}/integrations/status`);
+    assert.equal(res.status, 200);
+    const data = await res.json();
+    assert.ok(data.provider);
+});
