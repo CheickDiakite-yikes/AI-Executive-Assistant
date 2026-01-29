@@ -1,278 +1,211 @@
-# Maya — Revolutionary AI Executive Assistant
+# Maya — AI Executive Assistant (Voice + Visual + Text)
 
-Maya is a state-of-the-art, voice-first AI executive assistant designed to streamline your high-performance workflow. Built on a cutting-edge Google tech stack, Maya leverages the power of Gemini 2.5 and 3.0 series models to provide a seamless, proactive, and visually intelligent companion for modern leaders.
+Maya is a voice‑first executive assistant built on Google’s Gemini Live API. It supports **real‑time voice**, **camera input**, and **seamless fall‑back to text chat** while keeping the same conversation state. A dynamic **Canvas** renders JIT cards (email drafts, market pulse, dossiers, strategy memos, charts, etc.) either as overlays in voice mode or inline inside the chat transcript in text mode.
 
 ![License](https://img.shields.io/badge/license-MIT-blue.svg)
 ![Stack](https://img.shields.io/badge/stack-Google%20GenAI-orange.svg)
 ![React](https://img.shields.io/badge/framework-React%2019-blue.svg)
 
-## 🌟 Vision
-In a world of information overload, Maya acts as your digital chief of staff. She doesn't just answer questions; she anticipates needs, prepares dossiers for your meetings, monitors market pulses, and drafts strategic memos from your spoken thoughts.
+---
 
-## 🚀 Key Features
+## ✨ Highlights
 
-### 🎙️ Voice-First Interaction (Gemini Live)
-Engage in low-latency, natural conversations. Maya listens, thinks, and speaks with human-like prosody, allowing for hands-free productivity while you drive, walk, or work.
+- **Gemini Live voice**: low‑latency audio with turn detection.
+- **Camera grounding**: periodic image frames during voice sessions.
+- **Text mode continuity**: switch to `/text` and see the same session as a transcript + inline cards.
+- **Canvas JIT UI**: rich cards for email, calendar, market data, dossiers, memos, etc.
+- **Multi‑persona**: Maya / Atlas / Nova / Zorra with distinct instructions and voices.
+- **Telemetry hooks**: structured client‑side tracking for debugging and reliability.
 
-### 👁️ Visual Intelligence
-With integrated camera support, Maya can see what you see. Show her a printed chart, a prototype, or a whiteboard session, and she will provide instant analysis and documentation.
+---
 
-### 🖼️ Intelligent Canvas
-Instead of a static chat history, Maya uses a dynamic **Canvas** to display:
-- **Live Deal Dossiers**: Instant intelligence on companies and people before meetings.
-- **Market Pulse**: Real-time financial tickers and performance sparklines.
-- **Strategy Memos**: Automated debriefs from your meetings into Risks, Decisions, and Action Items.
-- **Email & Calendar**: Seamlessly manage your schedule and correspondence with proactive drafting.
+## 🧠 How It Works (High‑Level)
 
-### 🎭 Multi-Persona Architecture
-Choose the partner that matches your current goal:
-- **Maya**: The creative collaborator.
-- **Atlas**: The precise, strategic operator.
-- **Nova**: The high-energy execution specialist.
-- **Zorra**: The empathetic "bestie" and executive partner.
+### 1) Live session (audio + tools)
+- Connects to Gemini Live via `@google/genai`.
+- Streams **PCM 16kHz** mic audio in real time.
+- Receives **24kHz** PCM audio from Gemini, decodes and plays it back.
+- Optionally streams camera frames for visual grounding.
 
-## 💻 Tech Stack
+### 2) Text mode continuity
+- All voice turns are transcribed server‑side.
+- Transcripts are **stored in client state** and displayed only in `/text` mode.
+- Text turns are sent via `sendClientContent` and appended to the same Live session.
+
+### 3) Canvas JIT UI
+- Tool calls (email, calendar, market pulse, dossiers, etc.) render Canvas items.
+- In **voice mode**, Canvas appears as overlays.
+- In **text mode**, Canvas appears inline in the chat transcript.
+
+---
+
+## 🧱 Tech Stack
+
 - **Frontend**: React 19 + TypeScript + Vite
-- **Styling**: Tailwind CSS (Glassmorphism UI)
-- **Backend**: Express.js with TypeScript
-- **Database**: PostgreSQL with Drizzle ORM
-- **AI**: Google Gemini API (`@google/genai`)
-- **Logging**: Pino with structured logging
+- **Styling**: Tailwind via CDN (`index.html`) + custom glassmorphism styling
+- **AI**: Google Gemini Live API (`@google/genai`)
+- **Icons**: lucide-react
+- **Testing**: Node built‑in test runner (`node --test`)
+
+> This repo is **frontend‑only**. Tool actions are currently mocked in `services/tools.ts` for UX/flow testing.
 
 ---
 
-## 🛠️ Development Setup
-
-### Prerequisites
-- Node.js 20+ 
-- PostgreSQL database (local or cloud)
-- Google Gemini API key
-
-### Environment Variables
-
-Create a `.env` file in the project root:
-
-```bash
-# Required
-GEMINI_API_KEY=your_gemini_api_key_here
-DATABASE_URL=postgresql://user:password@localhost:5432/maya
-
-# Optional (defaults shown)
-PORT=3001
-NODE_ENV=development
-```
-
-### Local Development
-
-```bash
-# 1. Install dependencies
-npm install
-
-# 2. Set up your environment variables
-cp .env.example .env
-# Edit .env with your values
-
-# 3. Push database schema
-npm run db:migrate
-
-# 4. Start development servers
-npm run dev
-```
-
-This starts:
-- **Frontend**: http://localhost:5000 (Vite dev server)
-- **Backend API**: http://localhost:3001
-
-### Available Scripts
-
-| Script | Description |
-|--------|-------------|
-| `npm run dev` | Start both frontend and backend in development mode |
-| `npm run dev:frontend` | Start only the Vite frontend server |
-| `npm run dev:server` | Start only the Express backend server |
-| `npm run build` | Build frontend for production |
-| `npm run typecheck` | Run TypeScript type checking |
-| `npm run db:migrate` | Push schema changes to database |
-| `npm run db:studio` | Open Drizzle Studio to browse database |
-
----
-
-## 🏗️ Project Structure
+## 🗂️ Project Structure
 
 ```
 /
-├── App.tsx                  # Main React application entry
-├── components/              # React UI components
-├── constants.ts             # App configuration and personas
-├── services/                # Frontend services (tools, API calls)
-├── types.ts                 # TypeScript type definitions
-├── utils/                   # Frontend utilities (routing, telemetry)
-├── server/
-│   └── src/
-│       ├── index.ts         # Express server entry point
-│       ├── db/              # Database schema and connection
-│       ├── middleware/      # Request logging, error handling
-│       ├── routes/          # API endpoints
-│       ├── services/        # Backend services (log persistence)
-│       └── utils/           # Logger, helpers
-├── vite.config.ts           # Vite configuration
-├── drizzle.config.ts        # Drizzle ORM configuration
+├── App.tsx                 # Main application + Live session wiring
+├── components/             # UI components (Canvas, TextChat, Settings, etc.)
+├── services/               # Tool declarations + mock data
+├── utils/                  # Routing + telemetry helpers
+├── constants.ts            # Personas, model config, system instructions
+├── types.ts                # Shared types
+├── tests/                  # Node test files
+├── index.html              # Tailwind CDN + entry
+├── vite.config.ts          # Vite dev server config
 └── package.json
 ```
 
 ---
 
-## 🤝 Contributing
+## ✅ Requirements
 
-We welcome contributions! Please follow these guidelines to ensure a smooth collaboration.
-
-### Getting Started
-
-1. **Fork the repository** and clone your fork locally
-2. **Create a feature branch**: `git checkout -b feature/your-feature-name`
-3. **Make your changes** following our code style guidelines
-4. **Test your changes** locally (both Replit and local environments)
-5. **Submit a pull request** with a clear description
-
-### Code Style Guidelines
-
-- Use TypeScript for all new code
-- Follow existing patterns in the codebase
-- Use meaningful variable and function names
-- Add JSDoc comments for exported functions
-- Keep components small and focused
-
-### Commit Messages
-
-Use clear, descriptive commit messages:
-```
-feat: add voice session persistence
-fix: resolve database connection timeout
-docs: update README with local setup instructions
-refactor: extract audio processing into separate service
-```
-
-### Testing Changes
-
-Before submitting a PR, ensure:
-
-1. **TypeScript compiles**: `npm run typecheck`
-2. **Frontend builds**: `npm run build`
-3. **App runs locally**: `npm run dev`
-4. **Database migrations work**: `npm run db:migrate`
+- Node.js 20+
+- Google Gemini API key
 
 ---
 
-## ⚠️ Replit vs Local Development
+## 🔐 Environment Variables
 
-This project supports both Replit and local development environments. Here are important differences to keep in mind:
+Vite maps these into the frontend:
 
-### Port Configuration
-
-| Environment | Frontend Port | Backend Port |
-|-------------|---------------|--------------|
-| Replit      | 5000          | 3001         |
-| Local       | 5000          | 3001         |
-
-**Important**: The frontend must always bind to port 5000 for Replit compatibility.
-
-### Database
-
-- **Replit**: Uses built-in PostgreSQL (Neon-backed). Connection string is auto-configured via `DATABASE_URL` secret.
-- **Local**: You must provide your own PostgreSQL instance and set `DATABASE_URL` in `.env`.
-
-### Environment Variables
-
-- **Replit**: Secrets are managed via the Secrets tab in the Replit UI. Never commit secrets.
-- **Local**: Use a `.env` file (which is gitignored).
-
-### Vite Configuration
-
-The `vite.config.ts` is configured to work in both environments:
-- Allows all hosts (required for Replit's proxy)
-- Proxies `/api` requests to the backend on port 3001
-
-**Do not modify these settings** unless you understand the implications for Replit:
-
-```typescript
-server: {
-  host: '0.0.0.0',
-  port: 5000,
-  allowedHosts: true,  // Required for Replit
-  proxy: {
-    '/api': 'http://localhost:3001'
-  }
-}
+```
+GEMINI_API_KEY=your_key_here
 ```
 
-### What NOT to Change
+The app consumes:
+- `process.env.API_KEY`
+- `process.env.GEMINI_API_KEY`
 
-To maintain Replit compatibility:
-
-1. **Do not change the frontend port** from 5000
-2. **Do not remove `allowedHosts: true`** from Vite config
-3. **Do not use Docker** or containerization (not supported in Replit's Nix environment)
-4. **Do not hardcode localhost URLs** in frontend code that calls the backend - use relative paths (`/api/...`)
+Both are set from `GEMINI_API_KEY` in `vite.config.ts`.
 
 ---
 
-## 📊 Database Schema
+## ▶️ Running Locally
 
-The PostgreSQL database includes these tables:
+```bash
+npm install
+npm run dev
+```
 
-| Table | Purpose |
-|-------|---------|
-| `users` | User accounts |
-| `user_settings` | User preferences and persona selection |
-| `conversations` | Chat conversation threads |
-| `messages` | Individual messages in conversations |
-| `notes` | User notes with tags and attachments |
-| `emails` | Email drafts, sent, and received emails |
-| `calendar_events` | Calendar entries |
-| `canvas_items` | Dynamic canvas content (charts, emails, images) |
-| `images` | Image metadata and storage |
-| `voice_sessions` | Voice conversation sessions |
-| `transcripts` | Voice transcripts |
-| `tool_executions` | AI tool execution logs |
-| `api_logs` | API request/response logs |
-| `error_logs` | Error tracking |
+Open:
+- `http://localhost:5173` (or the port printed by Vite)
 
-### Making Schema Changes
+---
 
-1. Edit `server/src/db/schema.ts`
-2. Run `npm run db:migrate` to push changes
-3. Test thoroughly before committing
+## ▶️ Running on Replit (Important)
 
-**Never change primary key types** on existing tables - this breaks migrations.
+Vite must bind to **0.0.0.0** and **$PORT**.
+
+**Run command**:
+```bash
+npm run dev -- --host 0.0.0.0 --port $PORT
+```
+
+**Vite config (already included)**:
+- `host: true`
+- `port: Number(process.env.PORT) || 5000`
+- `strictPort: true`
+- `allowedHosts: true` (required for Replit proxy)
+
+If you see `PAGE_UNREACHABLE` or host block errors, make sure the Replit workflow is using the command above and that Vite is not running on `127.0.0.1`.
+
+---
+
+## 🧪 Tests & Checks
+
+```bash
+npm run typecheck
+npm test
+```
+
+- `npm test` runs the Node test suite in `tests/`.
+
+---
+
+## 🧭 Modes & Routing
+
+- **Voice Mode**: `/`
+  - Live voice, Canvas overlays, no transcript UI.
+- **Text Mode**: `/text`
+  - Live text + transcripts + inline Canvas cards.
+
+> There is no router dependency. Routing uses `history.pushState` + `popstate`.
+
+---
+
+## 🛠️ Telemetry & Debugging
+
+A lightweight client tracker lives in `utils/telemetry.js`.
+It stores recent events (200 max) at:
+
+```
+window.__mayaTelemetry
+```
+
+Events include:
+- session connect/disconnect
+- tool execution
+- transcription completion
+- audio/mic start/stop
+- routing changes
 
 ---
 
 ## 🔧 Troubleshooting
 
-### Frontend not loading in Replit
+### Text not responding
+- Ensure the session is connected.
+- Confirm the Live model supports `Modality.TEXT`.
+- Check console for `text_send_error` telemetry.
 
-1. Check that the workflow is running
-2. Verify Vite is binding to port 5000
-3. Ensure `allowedHosts: true` is in `vite.config.ts`
+### Replit host blocked
+- Confirm `allowedHosts: true` in `vite.config.ts`.
+- Restart the dev server after changes.
 
-### Database connection errors
+### Audio issues
+- Make sure your browser allows mic access.
+- iOS Safari requires user interaction to unlock audio contexts.
 
-1. Verify `DATABASE_URL` is set correctly
-2. Check that PostgreSQL is running
-3. Run `npm run db:migrate` to ensure schema is up to date
+---
 
-### Gemini API errors
+## ⚠️ Known Limitations
 
-1. Verify `GEMINI_API_KEY` is set
-2. Check API key has proper permissions
-3. Ensure you're not exceeding rate limits
+- Tool actions are **mocked** (see `services/tools.ts`) and do not hit real backends yet.
+- No server‑side persistence in this repo; transcript/history lives in client state.
+- `/text` requires SPA routing support (history fallback) when deployed.
+
+---
+
+## 🚀 Deployment
+
+### Static hosting (Vercel/Netlify/Cloudflare Pages)
+- Build: `npm run build`
+- Serve `dist/` as a static site.
+- Add **SPA fallback** so `/text` routes to `index.html`.
+
+### Example SPA fallback config
+- **Netlify**: `_redirects` with `/* /index.html 200`
+- **Vercel**: `rewrites` to `/index.html`
+- **Cloudflare Pages**: `_routes.json` or “Single‑Page App” setting
 
 ---
 
 ## 📄 License
 
-This project is open-source under the MIT License.
+MIT — see LICENSE.
 
 ---
 
-*Built with ❤️ using the Google Gemini API.*
+*Built with ❤️ using Google Gemini Live API.*
