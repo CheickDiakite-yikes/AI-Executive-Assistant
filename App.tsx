@@ -232,42 +232,57 @@ export default function App() {
       await ctx.resume();
     }
 
-    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-    streamRef.current = stream;
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      streamRef.current = stream;
 
-    const source = ctx.createMediaStreamSource(stream);
-    const processor = ctx.createScriptProcessor(4096, 1, 1);
+      const source = ctx.createMediaStreamSource(stream);
+      const processor = ctx.createScriptProcessor(4096, 1, 1);
 
-    processor.onaudioprocess = (e) => {
-      const inputData = e.inputBuffer.getChannelData(0);
+      processor.onaudioprocess = (e) => {
+        const inputData = e.inputBuffer.getChannelData(0);
 
-      // Calculate volume for visualizer
-      let sum = 0;
-      for (let i = 0; i < inputData.length; i++) sum += inputData[i] * inputData[i];
-      setVolume(Math.sqrt(sum / inputData.length) * 10);
+        // Calculate volume for visualizer
+        let sum = 0;
+        for (let i = 0; i < inputData.length; i++) sum += inputData[i] * inputData[i];
+        setVolume(Math.sqrt(sum / inputData.length) * 10);
 
-      // Convert Float32 to Int16 PCM
-      const pcmData = new Int16Array(inputData.length);
-      for (let i = 0; i < inputData.length; i++) {
-        let s = Math.max(-1, Math.min(1, inputData[i]));
-        pcmData[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
-      }
-
-      const base64Data = arrayBufferToBase64(pcmData.buffer);
-      session.sendRealtimeInput({
-        media: {
-          mimeType: 'audio/pcm;rate=16000',
-          data: base64Data
+        // Convert Float32 to Int16 PCM
+        const pcmData = new Int16Array(inputData.length);
+        for (let i = 0; i < inputData.length; i++) {
+          let s = Math.max(-1, Math.min(1, inputData[i]));
+          pcmData[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
         }
-      });
-    };
 
-    source.connect(processor);
-    processor.connect(ctx.destination);
+        const base64Data = arrayBufferToBase64(pcmData.buffer);
+        session.sendRealtimeInput({
+          media: {
+            mimeType: 'audio/pcm;rate=16000',
+            data: base64Data
+          }
+        });
+      };
 
-    sourceRef.current = source;
-    processorRef.current = processor;
-    trackEvent('mic_start');
+      source.connect(processor);
+      processor.connect(ctx.destination);
+
+      sourceRef.current = source;
+      processorRef.current = processor;
+      trackEvent('mic_start');
+
+    } catch (e: any) {
+      console.error("Mic start failed", e);
+      let msg = "Could not access microphone.";
+      if (e.name === 'NotAllowedError') {
+        msg = "Microphone permission denied. Please allow access in browser settings.";
+      } else if (e.name === 'NotFoundError') {
+        msg = "No microphone found on this device.";
+      } else if (e.name === 'NotReadableError') {
+        msg = "Microphone is busy or not readable. Check other apps.";
+      }
+      setErrorMsg(msg);
+      throw e; // Re-throw to caller
+    }
   };
 
   const navigateToMode = (mode: ViewMode) => {
