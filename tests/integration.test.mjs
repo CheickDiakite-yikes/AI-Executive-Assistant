@@ -138,3 +138,10 @@ test('Integration: Integrations Status', { skip: !(await isServerRunning()) }, a
     const data = await res.json();
     assert.ok(data.provider);
 });
+
+test('Integration: Integrations Health', { skip: !(await isServerRunning()) }, async () => {
+    const res = await fetch(`${API_BASE}/integrations/health`);
+    assert.equal(res.status, 200);
+    const data = await res.json();
+    assert.ok(typeof data.healthy === 'boolean');
+});

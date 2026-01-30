@@ -37,6 +37,7 @@ export function requestLogger(req: Request, res: Response, next: NextFunction) {
       metadata: {
         userAgent: req.headers['user-agent'],
         query: req.query,
+        userId: req.headers['x-user-id'] || req.headers['x-visitor-id'],
       },
     });
   });

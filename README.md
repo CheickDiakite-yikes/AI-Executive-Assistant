@@ -97,6 +97,7 @@ Both are set from `GEMINI_API_KEY` in `vite.config.ts`.
 ```
 API_PORT=3001
 MAYA_INTEGRATIONS_PROVIDER=mock
+MAYA_USER_ID=default
 FRONTEND_URL=http://localhost:5173
 GOOGLE_OAUTH_CLIENT_ID=your_client_id
 GOOGLE_OAUTH_CLIENT_SECRET=your_client_secret
@@ -108,6 +109,7 @@ Notes:
 - `MAYA_INTEGRATIONS_PROVIDER` supports `mock`, `google`, or `auto` (defaults to `mock`).
 - Google OAuth env vars are required to connect Gmail/Calendar.
 - After OAuth, the server redirects to `FRONTEND_URL`.
+ - The frontend sends an `x-user-id` header (stored in localStorage) so integrations persist per user.
 
 ---
 
@@ -130,7 +132,8 @@ Open:
 3) Open **Settings → Integrations → Connect** and complete Google OAuth.
 
 If `MAYA_INTEGRATIONS_PROVIDER=mock`, Maya stays in demo mode with safe mock data.
-OAuth tokens are stored in memory for now (server restart clears connections).
+OAuth tokens are persisted in Postgres (and cached in memory).
+After pulling updates, run `npm run db:migrate` to create the new `integrations` table.
 
 ---
 
@@ -158,6 +161,12 @@ If you see `PAGE_UNREACHABLE` or host block errors, make sure the Replit workflo
 ```bash
 npm run typecheck
 npm test
+```
+
+Integration smoke test (requires API running):
+
+```bash
+npm run test:integrations
 ```
 
 - `npm test` runs the Node test suite in `tests/`.

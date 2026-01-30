@@ -14,9 +14,21 @@ export default function Settings({ onClose }: SettingsProps) {
      gmailConnected: false,
      calendarConnected: false,
      connectedAt: null as number | null,
+     tokenExpiresAt: null as number | null,
+     metadata: {} as Record<string, unknown>,
   });
   const [loadingIntegrations, setLoadingIntegrations] = useState(false);
   const [integrationError, setIntegrationError] = useState<string | null>(null);
+  const [integrationHealth, setIntegrationHealth] = useState<null | {
+     provider: string;
+     mode: string;
+     googleConfigured: boolean;
+     healthy: boolean;
+     email: { ok?: boolean; status?: string; address?: string | null; error?: string | null };
+     calendar: { ok?: boolean; status?: string; error?: string | null };
+  }>(null);
+  const [healthLoading, setHealthLoading] = useState(false);
+  const [healthError, setHealthError] = useState<string | null>(null);
   const [notifications, setNotifications] = useState(true);
 
   const refreshIntegrations = async () => {
@@ -38,6 +50,19 @@ export default function Settings({ onClose }: SettingsProps) {
      window.addEventListener('focus', onFocus);
      return () => window.removeEventListener('focus', onFocus);
   }, []);
+
+  const runHealthCheck = async () => {
+     setHealthLoading(true);
+     setHealthError(null);
+     try {
+        const result = await api.integrations.health();
+        setIntegrationHealth(result);
+     } catch (err) {
+        setHealthError('Health check failed. Please try again.');
+     } finally {
+        setHealthLoading(false);
+     }
+  };
 
   const handleConnect = async () => {
      setLoadingIntegrations(true);
@@ -68,6 +93,25 @@ export default function Settings({ onClose }: SettingsProps) {
   const isGoogleMode = integrationStatus.provider === 'google';
   const gmailConnected = integrationStatus.gmailConnected;
   const gcalConnected = integrationStatus.calendarConnected;
+  const metadata = integrationStatus.metadata as Record<string, any>;
+  const lastEmailSyncAt = metadata?.lastEmailSyncAt as string | undefined;
+  const lastCalendarSyncAt = metadata?.lastCalendarSyncAt as string | undefined;
+  const lastHealthCheckAt = metadata?.lastHealthCheckAt as string | undefined;
+
+  useEffect(() => {
+     if (isGoogleMode && (gmailConnected || gcalConnected)) {
+        runHealthCheck();
+     } else {
+        setIntegrationHealth(null);
+     }
+  }, [isGoogleMode, gmailConnected, gcalConnected]);
+
+  const formatTimestamp = (value?: string | number | null) => {
+     if (!value) return '—';
+     const date = typeof value === 'string' ? new Date(value) : new Date(value);
+     if (Number.isNaN(date.getTime())) return '—';
+     return date.toLocaleString();
+  };
 
   return (
     <div className="absolute inset-0 z-50 bg-black/95 backdrop-blur-xl animate-in slide-in-from-right duration-300 flex flex-col text-white">
@@ -187,6 +231,70 @@ export default function Settings({ onClose }: SettingsProps) {
                        Google OAuth is not configured. Add server env vars to enable live integrations.
                     </div>
                  )}
+
+                 <div className="mt-4 p-4 rounded-2xl border border-white/10 bg-white/5">
+                    <div className="flex items-center justify-between">
+                       <div>
+                          <div className="text-xs font-semibold uppercase tracking-widest text-white/40">Connection Health</div>
+                          <div className="text-sm text-white/80 mt-1">Provider: {integrationStatus.provider}</div>
+                       </div>
+                       <button
+                          onClick={runHealthCheck}
+                          disabled={healthLoading || !isGoogleMode}
+                          className={`px-3 py-1 text-[10px] uppercase tracking-wider rounded-full border ${healthLoading ? 'border-white/10 text-white/40' : 'border-white/20 text-white/70 hover:text-white'} ${!isGoogleMode ? 'opacity-50 cursor-not-allowed' : 'hover:bg-white/10'}`}
+                       >
+                          {healthLoading ? 'Checking' : 'Run Check'}
+                       </button>
+                    </div>
+
+                    <div className="mt-3 grid grid-cols-2 gap-3 text-xs text-white/60">
+                       <div className="p-3 rounded-xl bg-black/30 border border-white/5">
+                          <div className="uppercase tracking-wider text-[10px] text-white/40 mb-1">Gmail</div>
+                          <div className="font-semibold text-white/80">
+                             {isGoogleMode ? (gmailConnected ? 'Connected' : 'Not Connected') : 'Demo'}
+                          </div>
+                          <div className="text-[11px] text-white/40 mt-1">
+                             Last sync: {formatTimestamp(lastEmailSyncAt)}
+                          </div>
+                       </div>
+                       <div className="p-3 rounded-xl bg-black/30 border border-white/5">
+                          <div className="uppercase tracking-wider text-[10px] text-white/40 mb-1">Calendar</div>
+                          <div className="font-semibold text-white/80">
+                             {isGoogleMode ? (gcalConnected ? 'Connected' : 'Not Connected') : 'Demo'}
+                          </div>
+                          <div className="text-[11px] text-white/40 mt-1">
+                             Last sync: {formatTimestamp(lastCalendarSyncAt)}
+                          </div>
+                       </div>
+                    </div>
+
+                    <div className="mt-3 flex items-center justify-between text-[11px] text-white/40">
+                       <span>Last health check: {formatTimestamp(lastHealthCheckAt)}</span>
+                       <span>
+                          {integrationHealth
+                             ? (integrationHealth.healthy ? 'Healthy' : 'Issues detected')
+                             : 'Not checked'}
+                       </span>
+                    </div>
+
+                    {integrationHealth?.email?.address && (
+                       <div className="mt-2 text-[11px] text-white/50">
+                          Gmail account: {integrationHealth.email.address}
+                       </div>
+                    )}
+
+                    {healthError && (
+                       <div className="mt-3 px-3 py-2 text-[11px] text-red-300 bg-red-500/10 border border-red-500/20 rounded-xl">
+                          {healthError}
+                       </div>
+                    )}
+
+                    {integrationHealth && !integrationHealth.healthy && (
+                       <div className="mt-3 px-3 py-2 text-[11px] text-amber-200/80 bg-amber-500/10 border border-amber-500/20 rounded-xl">
+                          {integrationHealth.email.error || integrationHealth.calendar.error || 'Integration checks failed.'}
+                       </div>
+                    )}
+                 </div>
               </section>
 
               {/* General Settings */}

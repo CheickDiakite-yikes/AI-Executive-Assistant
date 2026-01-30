@@ -7,8 +7,38 @@ const resolveApiBase = () => {
 
 const API_BASE = resolveApiBase();
 
-const request = async (path, options) => {
-  const res = await fetch(`${API_BASE}${path}`, options);
+const getUserId = () => {
+  if (typeof window === 'undefined') {
+    return process.env.MAYA_USER_ID || 'default';
+  }
+  if (window.__MAYA_USER_ID) {
+    return window.__MAYA_USER_ID;
+  }
+  const storageKey = 'maya_user_id';
+  let userId = window.localStorage.getItem(storageKey);
+  if (!userId) {
+    if (typeof crypto !== 'undefined' && 'randomUUID' in crypto) {
+      userId = crypto.randomUUID();
+    } else {
+      userId = `user-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    }
+    window.localStorage.setItem(storageKey, userId);
+  }
+  return userId;
+};
+
+const request = async (path, options = {}) => {
+  const baseHeaders = {
+    'x-user-id': getUserId(),
+  };
+  const mergedHeaders = {
+    ...baseHeaders,
+    ...(options.headers || {}),
+  };
+  const res = await fetch(`${API_BASE}${path}`, {
+    ...options,
+    headers: mergedHeaders,
+  });
   if (!res.ok) {
     const text = await res.text().catch(() => '');
     throw new Error(text || `Request failed: ${res.status}`);
@@ -122,6 +152,9 @@ export const api = {
       return request('/api/integrations/google/disconnect', {
         method: 'POST',
       });
+    },
+    health: async () => {
+      return request('/api/integrations/health');
     },
   },
 };

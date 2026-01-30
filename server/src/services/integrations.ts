@@ -1,5 +1,6 @@
 import { randomUUID } from 'crypto';
 import { logger } from '../utils/logger';
+import { clearIntegrationRecord, getIntegrationRecord, upsertIntegrationRecord, updateIntegrationMetadata } from './integrationStore';
 
 type Credentials = {
   access_token?: string;
@@ -161,14 +162,53 @@ const googleScopes = () => {
 
 const isGoogleConfigured = () => Boolean(googleConfig.clientId && googleConfig.clientSecret && googleConfig.redirectUri);
 
-let oauthState: string | null = null;
-let googleTokens: Credentials | null = null;
-let googleConnectedAt: number | null = null;
+const oauthStateToUserId = new Map<string, string>();
+const tokenCache = new Map<string, Credentials>();
+const connectedAtCache = new Map<string, number>();
 
-const mergeGoogleTokens = (tokens: Credentials) => {
-  if (!tokens) return;
-  googleTokens = { ...(googleTokens || {}), ...tokens };
-  googleConnectedAt = Date.now();
+const cacheKey = (userId: string) => `google:${userId}`;
+
+const loadTokensFromStore = async (userId: string) => {
+  const record = await getIntegrationRecord(userId, 'google');
+  if (!record) return null;
+  const tokens: Credentials = {
+    access_token: record.accessToken || undefined,
+    refresh_token: record.refreshToken || undefined,
+    token_type: record.tokenType || undefined,
+    scope: record.scope || undefined,
+    expiry_date: record.expiryDate ? record.expiryDate.getTime() : undefined,
+  };
+  tokenCache.set(cacheKey(userId), tokens);
+  if (record.connectedAt) {
+    connectedAtCache.set(cacheKey(userId), record.connectedAt.getTime());
+  }
+  return tokens;
+};
+
+const getCachedTokens = async (userId: string) => {
+  const existing = tokenCache.get(cacheKey(userId));
+  if (existing) return existing;
+  return loadTokensFromStore(userId);
+};
+
+const mergeGoogleTokens = async (userId: string, tokens: Credentials) => {
+  if (!tokens) return null;
+  const key = cacheKey(userId);
+  const merged = { ...(tokenCache.get(key) || {}), ...tokens };
+  tokenCache.set(key, merged);
+  connectedAtCache.set(key, Date.now());
+
+  await upsertIntegrationRecord({
+    userId,
+    provider: 'google',
+    accessToken: merged.access_token || null,
+    refreshToken: merged.refresh_token || null,
+    tokenType: merged.token_type || null,
+    scope: merged.scope || null,
+    expiryDate: merged.expiry_date ? new Date(merged.expiry_date) : null,
+  });
+
+  return merged;
 };
 
 const TOKEN_REFRESH_BUFFER_MS = 60_000;
@@ -195,6 +235,7 @@ const exchangeCodeForTokens = async (code: string) => {
   });
   const data = await res.json();
   if (!res.ok) {
+    logger.error({ status: res.status, error: data?.error }, 'Google token exchange failed');
     throw new IntegrationError(`Google token exchange failed: ${data.error || res.status}`, 'google_token_exchange_failed', 502);
   }
   const expiryDate = data.expires_in ? Date.now() + Number(data.expires_in) * 1000 : undefined;
@@ -216,33 +257,37 @@ const refreshAccessToken = async (refreshToken: string) => {
   });
   const data = await res.json();
   if (!res.ok) {
+    logger.error({ status: res.status, error: data?.error }, 'Google token refresh failed');
     throw new IntegrationError(`Google token refresh failed: ${data.error || res.status}`, 'google_token_refresh_failed', 502);
   }
   const expiryDate = data.expires_in ? Date.now() + Number(data.expires_in) * 1000 : undefined;
   return { ...data, expiry_date: expiryDate } as Credentials;
 };
 
-const getValidAccessToken = async () => {
-  if (!googleTokens) {
+const getValidAccessToken = async (userId: string) => {
+  const tokens = await getCachedTokens(userId);
+  if (!tokens) {
+    logger.warn({ userId }, 'Google integration not connected');
     throw new IntegrationError('Google integration not connected', 'google_not_connected', 401);
   }
-  const accessToken = googleTokens.access_token;
-  const expiryDate = googleTokens.expiry_date || 0;
+  const accessToken = tokens.access_token;
+  const expiryDate = tokens.expiry_date || 0;
   if (accessToken && expiryDate - Date.now() > TOKEN_REFRESH_BUFFER_MS) {
     return accessToken;
   }
-  if (googleTokens.refresh_token) {
-    const refreshed = await refreshAccessToken(googleTokens.refresh_token);
-    mergeGoogleTokens(refreshed);
-    if (googleTokens?.access_token) {
-      return googleTokens.access_token;
+  if (tokens.refresh_token) {
+    const refreshed = await refreshAccessToken(tokens.refresh_token);
+    const merged = await mergeGoogleTokens(userId, refreshed);
+    if (merged?.access_token) {
+      return merged.access_token;
     }
   }
+  logger.warn({ userId }, 'Google access token expired');
   throw new IntegrationError('Google access token expired', 'google_token_expired', 401);
 };
 
-const googleApiFetch = async (url: string, options: RequestInit = {}) => {
-  const accessToken = await getValidAccessToken();
+const googleApiFetch = async (userId: string, url: string, options: RequestInit = {}) => {
+  const accessToken = await getValidAccessToken(userId);
   const res = await fetch(url, {
     ...options,
     headers: {
@@ -255,6 +300,7 @@ const googleApiFetch = async (url: string, options: RequestInit = {}) => {
     const text = await res.text().catch(() => '');
     const status = res.status;
     const code = status === 401 ? 'google_not_connected' : 'google_api_error';
+    logger.error({ status, url }, 'Google API request failed');
     throw new IntegrationError(`Google API error (${status}): ${text || res.statusText}`, code, status === 401 ? 401 : 502);
   }
   if (res.status === 204) return null;
@@ -372,13 +418,13 @@ const mockEmailProvider = {
   },
 };
 
-const googleEmailProvider = {
+const createGoogleEmailProvider = (userId: string) => ({
   provider: 'google',
   async search(query: string) {
     const listUrl = new URL('https://gmail.googleapis.com/gmail/v1/users/me/messages');
     listUrl.searchParams.set('q', query);
     listUrl.searchParams.set('maxResults', '5');
-    const list = await googleApiFetch(listUrl.toString(), { method: 'GET' });
+    const list = await googleApiFetch(userId, listUrl.toString(), { method: 'GET' });
     const ids = (list.messages || []).map((msg: { id?: string }) => msg.id).filter(Boolean) as string[];
     if (!ids || ids.length === 0) {
       return { email: null, results: [] };
@@ -390,7 +436,7 @@ const googleEmailProvider = {
         msgUrl.searchParams.append('metadataHeaders', 'From');
         msgUrl.searchParams.append('metadataHeaders', 'Subject');
         msgUrl.searchParams.append('metadataHeaders', 'Date');
-        const msg = await googleApiFetch(msgUrl.toString(), { method: 'GET' });
+        const msg = await googleApiFetch(userId, msgUrl.toString(), { method: 'GET' });
         const headers = msg.payload?.headers;
         return {
           id,
@@ -406,19 +452,19 @@ const googleEmailProvider = {
   },
   async draft(recipient: string, subject: string, body: string) {
     const raw = encodeMessage(recipient, subject, body);
-    return googleApiFetch('https://gmail.googleapis.com/gmail/v1/users/me/drafts', {
+    return googleApiFetch(userId, 'https://gmail.googleapis.com/gmail/v1/users/me/drafts', {
       method: 'POST',
       body: JSON.stringify({ message: { raw } }),
     });
   },
   async send(recipient: string, subject: string, body: string) {
     const raw = encodeMessage(recipient, subject, body);
-    return googleApiFetch('https://gmail.googleapis.com/gmail/v1/users/me/messages/send', {
+    return googleApiFetch(userId, 'https://gmail.googleapis.com/gmail/v1/users/me/messages/send', {
       method: 'POST',
       body: JSON.stringify({ raw }),
     });
   },
-};
+});
 
 const mockCalendarProvider = {
   provider: 'mock',
@@ -431,7 +477,7 @@ const mockCalendarProvider = {
   },
 };
 
-const googleCalendarProvider = {
+const createGoogleCalendarProvider = (userId: string) => ({
   provider: 'google',
   async list() {
     const now = new Date();
@@ -446,7 +492,7 @@ const googleCalendarProvider = {
     listUrl.searchParams.set('singleEvents', 'true');
     listUrl.searchParams.set('orderBy', 'startTime');
 
-    const res = await googleApiFetch(listUrl.toString(), { method: 'GET' });
+    const res = await googleApiFetch(userId, listUrl.toString(), { method: 'GET' });
     const items = res.items || [];
     return items.map((evt) => {
       const start = evt.start?.dateTime || evt.start?.date || '';
@@ -467,7 +513,7 @@ const googleCalendarProvider = {
       ? payload.participants.split(',').map((email) => ({ email: email.trim() })).filter((att) => att.email)
       : undefined;
 
-    const response = await googleApiFetch('https://www.googleapis.com/calendar/v3/calendars/primary/events', {
+    const response = await googleApiFetch(userId, 'https://www.googleapis.com/calendar/v3/calendars/primary/events', {
       method: 'POST',
       body: JSON.stringify({
         summary: payload.title,
@@ -486,9 +532,9 @@ const googleCalendarProvider = {
       location: evt.location || 'TBD',
     } as CalendarEvent;
 
-    return { event: mapped, events: await googleCalendarProvider.list() };
+    return { event: mapped, events: await createGoogleCalendarProvider(userId).list() };
   },
-};
+});
 
 const mockMarketProvider = {
   provider: 'mock',
@@ -497,23 +543,34 @@ const mockMarketProvider = {
   },
 };
 
-export const getIntegrationStatus = () => {
+export const getIntegrationStatus = async (userId: string) => {
   const provider = selectProvider();
   const googleConfigured = isGoogleConfigured();
+  let record = null;
+
+  if (provider === 'google') {
+    record = await getIntegrationRecord(userId, 'google');
+  }
+
+  const connected = provider === 'google' ? Boolean(record?.refreshToken || record?.accessToken) : false;
+  const metadata = (record?.metadata || {}) as Record<string, unknown>;
+
   return {
     provider,
     mode: integrationMode(),
     googleConfigured,
-    gmailConnected: provider === 'google' ? Boolean(googleTokens) : false,
-    calendarConnected: provider === 'google' ? Boolean(googleTokens) : false,
-    connectedAt: googleConnectedAt,
+    gmailConnected: connected,
+    calendarConnected: connected,
+    connectedAt: record?.connectedAt ? record.connectedAt.getTime() : null,
+    tokenExpiresAt: record?.expiryDate ? record.expiryDate.getTime() : null,
+    metadata,
   };
 };
 
-export const getGoogleAuthUrl = () => {
+export const getGoogleAuthUrl = (userId: string) => {
   requireGoogleConfig();
   const state = randomUUID();
-  oauthState = state;
+  oauthStateToUserId.set(state, userId);
   const params = new URLSearchParams();
   params.set('client_id', googleConfig.clientId || '');
   params.set('redirect_uri', googleConfig.redirectUri || '');
@@ -531,31 +588,98 @@ export const handleGoogleCallback = async (code: string, state?: string) => {
   if (!code) {
     throw new IntegrationError('Missing OAuth code', 'missing_code', 400);
   }
-  if (oauthState && state && state !== oauthState) {
+  const userId = state ? oauthStateToUserId.get(state) : undefined;
+  if (state && !userId) {
     throw new IntegrationError('Invalid OAuth state', 'invalid_state', 400);
   }
+  if (state) {
+    oauthStateToUserId.delete(state);
+  }
+  const resolvedUserId = userId || 'default';
   const tokens = await exchangeCodeForTokens(code);
-  mergeGoogleTokens(tokens);
-  logger.info({ provider: 'google' }, 'Google OAuth connected');
-  return tokens;
+  await mergeGoogleTokens(resolvedUserId, tokens);
+  logger.info({ provider: 'google', userId: resolvedUserId }, 'Google OAuth connected');
+  return { userId: resolvedUserId, tokens };
 };
 
-export const disconnectGoogle = () => {
-  googleTokens = null;
-  googleConnectedAt = null;
-  oauthState = null;
+export const disconnectGoogle = async (userId: string) => {
+  tokenCache.delete(cacheKey(userId));
+  connectedAtCache.delete(cacheKey(userId));
+  await clearIntegrationRecord(userId, 'google');
 };
 
-export const getEmailProvider = () => {
+export const getEmailProvider = (userId: string) => {
   const provider = selectProvider();
-  return provider === 'google' ? googleEmailProvider : mockEmailProvider;
+  return provider === 'google' ? createGoogleEmailProvider(userId) : mockEmailProvider;
 };
 
-export const getCalendarProvider = () => {
+export const getCalendarProvider = (userId: string) => {
   const provider = selectProvider();
-  return provider === 'google' ? googleCalendarProvider : mockCalendarProvider;
+  return provider === 'google' ? createGoogleCalendarProvider(userId) : mockCalendarProvider;
 };
 
 export const getMarketProvider = () => {
   return mockMarketProvider;
+};
+
+export const runIntegrationHealthCheck = async (userId: string) => {
+  const provider = selectProvider();
+  const mode = integrationMode();
+  const googleConfigured = isGoogleConfigured();
+
+  if (provider !== 'google') {
+    return {
+      provider,
+      mode,
+      googleConfigured,
+      healthy: true,
+      email: { status: 'mock' },
+      calendar: { status: 'mock' },
+    };
+  }
+
+  const result = {
+    provider,
+    mode,
+    googleConfigured,
+    healthy: false,
+    email: { ok: false as boolean, address: null as string | null, error: null as string | null },
+    calendar: { ok: false as boolean, error: null as string | null },
+  };
+
+  try {
+    const profile = await googleApiFetch(userId, 'https://gmail.googleapis.com/gmail/v1/users/me/profile', { method: 'GET' });
+    result.email.ok = true;
+    result.email.address = profile.emailAddress || null;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Unknown error';
+    result.email.error = message;
+    logger.error({ error, userId }, 'Gmail health check failed');
+  }
+
+  try {
+    const listUrl = new URL('https://www.googleapis.com/calendar/v3/users/me/calendarList');
+    listUrl.searchParams.set('maxResults', '1');
+    await googleApiFetch(userId, listUrl.toString(), { method: 'GET' });
+    result.calendar.ok = true;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Unknown error';
+    result.calendar.error = message;
+    logger.error({ error, userId }, 'Calendar health check failed');
+  }
+
+  result.healthy = result.email.ok && result.calendar.ok;
+
+  try {
+    await updateIntegrationMetadata(userId, 'google', {
+      lastHealthCheckAt: new Date().toISOString(),
+      lastHealthStatus: result.healthy ? 'ok' : 'error',
+      lastHealthError: !result.healthy ? { email: result.email.error, calendar: result.calendar.error } : null,
+      emailAddress: result.email.address,
+    });
+  } catch (error) {
+    logger.error({ error, userId }, 'Failed to store integration health metadata');
+  }
+
+  return result;
 };

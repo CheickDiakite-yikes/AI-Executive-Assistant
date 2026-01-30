@@ -66,6 +66,12 @@ test('api.integrations.status calls integrations status endpoint', async () => {
     assert.ok(lastUrl.includes('/api/integrations/status'));
 });
 
+test('api requests include x-user-id header', async () => {
+    mockResponse = { provider: 'mock' };
+    await api.integrations.status();
+    assert.ok(lastOptions.headers['x-user-id']);
+});
+
 test('api.integrations.connectGoogle calls connect endpoint', async () => {
     mockResponse = { authUrl: 'https://example.com' };
     await api.integrations.connectGoogle();
@@ -78,4 +84,10 @@ test('api.integrations.disconnectGoogle calls disconnect endpoint', async () => 
     await api.integrations.disconnectGoogle();
     assert.ok(lastUrl.includes('/api/integrations/google/disconnect'));
     assert.equal(lastOptions.method, 'POST');
+});
+
+test('api.integrations.health calls health endpoint', async () => {
+    mockResponse = { healthy: true };
+    await api.integrations.health();
+    assert.ok(lastUrl.includes('/api/integrations/health'));
 });

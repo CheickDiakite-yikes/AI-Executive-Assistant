@@ -12,6 +12,7 @@
     "preview": "vite preview",
     "typecheck": "tsc --noEmit",
     "test": "npx tsx --test tests/**/*.test.mjs",
+    "test:integrations": "node scripts/integration-smoke.mjs",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "drizzle-kit push",
     "db:studio": "drizzle-kit studio"

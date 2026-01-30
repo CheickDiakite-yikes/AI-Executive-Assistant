@@ -25,8 +25,18 @@ export const api: {
       gmailConnected: boolean;
       calendarConnected: boolean;
       connectedAt: number | null;
+      tokenExpiresAt: number | null;
+      metadata: Record<string, unknown>;
     }>;
     connectGoogle: () => Promise<{ authUrl: string }>;
     disconnectGoogle: () => Promise<{ success: boolean }>;
+    health: () => Promise<{
+      provider: string;
+      mode: string;
+      googleConfigured: boolean;
+      healthy: boolean;
+      email: { ok?: boolean; status?: string; address?: string | null; error?: string | null };
+      calendar: { ok?: boolean; status?: string; error?: string | null };
+    }>;
   };
 };

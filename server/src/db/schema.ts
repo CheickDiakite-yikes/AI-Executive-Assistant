@@ -157,3 +157,17 @@ export const errorLogs = pgTable('error_logs', {
   context: jsonb('context').default({}),
   createdAt: timestamp('created_at').defaultNow().notNull(),
 });
+
+export const integrations = pgTable('integrations', {
+  id: uuid('id').defaultRandom().primaryKey(),
+  userId: varchar('user_id', { length: 100 }).notNull(),
+  provider: varchar('provider', { length: 50 }).notNull(),
+  accessToken: text('access_token'),
+  refreshToken: text('refresh_token'),
+  tokenType: varchar('token_type', { length: 50 }),
+  scope: text('scope'),
+  expiryDate: timestamp('expiry_date'),
+  connectedAt: timestamp('connected_at').defaultNow().notNull(),
+  updatedAt: timestamp('updated_at').defaultNow().notNull(),
+  metadata: jsonb('metadata').default({}),
+});
