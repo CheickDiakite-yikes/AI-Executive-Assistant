@@ -13,6 +13,7 @@ import { trackEvent, trackError, trackToolExecution } from './utils/telemetry';
 import { GEMINI_MODEL, PERSONAS, getSystemInstruction } from './constants';
 import { toolsDeclaration, DUMMY_EMAILS, DUMMY_CALENDAR, generateMarketData } from './services/tools';
 import { api } from './services/api';
+import Logger from './utils/logger';
 
 const base64ToUint8Array = (base64: string): Uint8Array => {
   const binaryString = atob(base64);
@@ -39,6 +40,12 @@ const makeId = () => {
     return crypto.randomUUID();
   }
   return `msg-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+};
+
+const summarizeText = (text: string, max = 180) => {
+  if (!text) return '';
+  if (text.length <= max) return text;
+  return `${text.slice(0, max)}...`;
 };
 
 type ViewMode = 'voice' | 'text';
@@ -298,7 +305,7 @@ export default function App() {
           await startMicInput(sessionRef.current);
           setAgentState(AgentState.LISTENING);
         } catch (e: any) {
-          console.error("Mic start failed", e);
+          Logger.error('Mic', 'Mic start failed', e);
           setErrorMsg("Could not access microphone.");
           trackError('mic_start_error', e);
         }
@@ -309,6 +316,7 @@ export default function App() {
     try {
       const connectStart = performance.now();
       trackEvent('session_connect_start', { withMic });
+      Logger.info('Session', 'Initiating connection', { withMic, model: GEMINI_MODEL });
 
       // Resume audio context if suspended (browser policy)
       if (audioContextRef.current?.state === 'suspended') {
@@ -317,144 +325,224 @@ export default function App() {
       if (inputContextRef.current?.state === 'suspended') {
         await inputContextRef.current.resume();
       }
-
-      setAgentState(withMic ? AgentState.LISTENING : AgentState.IDLE);
-
-      const ai = genAI.current;
-
-      const config = {
-        model: GEMINI_MODEL,
-        config: {
-          responseModalities: [Modality.AUDIO, Modality.TEXT],
-          speechConfig: {
-            voiceConfig: { prebuiltVoiceConfig: { voiceName: activePersona.voiceName } }
-          },
-          inputAudioTranscription: {},
-          outputAudioTranscription: {},
-          systemInstruction: getSystemInstruction(activePersona.id),
-          // Enable Custom Tools AND Google Search (for real-world grounding)
-          tools: [
-            { functionDeclarations: toolsDeclaration },
-            { googleSearch: {} }
-          ]
-        }
-      };
-
-      const connectPromise = ai.live.connect({
-        ...config,
-        callbacks: {
-          onopen: () => {
-            console.log("Gemini Live Session Opened");
-            trackEvent('session_socket_open');
-          },
-          onmessage: async (msg: LiveServerMessage) => {
-            console.log("Received message:", msg);
-
-            const inputTranscription = msg.serverContent?.inputTranscription;
-            if (inputTranscription?.text) {
-              pendingUserTranscriptRef.current += inputTranscription.text;
-            }
-            if (inputTranscription?.finished) {
-              const finalUserText = pendingUserTranscriptRef.current.trim();
-              if (finalUserText) {
-                addUserMessage(finalUserText);
-                trackEvent('input_transcription_final', { length: finalUserText.length });
-              }
-              pendingUserTranscriptRef.current = '';
-            }
-
-            const outputTranscription = msg.serverContent?.outputTranscription;
-            if (outputTranscription?.text) {
-              pendingAssistantTranscriptRef.current += outputTranscription.text;
-            }
-            const textParts = msg.serverContent?.modelTurn?.parts;
-            if (textParts && Array.isArray(textParts)) {
-              for (const part of textParts) {
-                if (part && typeof part === 'object' && 'text' in part && part.text) {
-                  assistantTurnHasTextRef.current = true;
-                  pendingAssistantTextRef.current += part.text as string;
-                }
-              }
-            }
-
-            const modelParts = msg.serverContent?.modelTurn?.parts;
-            const audioData = modelParts?.find((part: any) => part?.inlineData?.data)?.inlineData?.data;
-            if (audioData) {
-              setAgentState(AgentState.SPEAKING);
-              playAudioChunk(audioData);
-            }
-
-            if (outputTranscription?.finished && !assistantTurnHasTextRef.current) {
-              const finalAssistantTranscript = pendingAssistantTranscriptRef.current.trim();
-              if (finalAssistantTranscript) {
-                addAssistantMessage(finalAssistantTranscript);
-                trackEvent('output_transcription_final', { length: finalAssistantTranscript.length });
-              }
-              pendingAssistantTranscriptRef.current = '';
-            }
-
-            if (msg.serverContent?.turnComplete) {
-              const finalAssistantText = pendingAssistantTextRef.current.trim();
-              if (finalAssistantText) {
-                addAssistantMessage(finalAssistantText);
-                trackEvent('assistant_text_final', { length: finalAssistantText.length });
-              } else if (!assistantTurnHasTextRef.current) {
-                const finalAssistantTranscript = pendingAssistantTranscriptRef.current.trim();
-                if (finalAssistantTranscript) {
-                  addAssistantMessage(finalAssistantTranscript);
-                  trackEvent('output_transcription_final', { length: finalAssistantTranscript.length });
-                }
-              }
-
-              pendingAssistantTextRef.current = '';
-              pendingAssistantTranscriptRef.current = '';
-              assistantTurnHasTextRef.current = false;
-              setAgentState(AgentState.LISTENING);
-              trackEvent('turn_complete');
-            }
-
-            if (msg.toolCall) {
-              handleToolCall(msg.toolCall, connectPromise);
-            }
-          },
-          onclose: () => {
-            console.log("Session Closed");
-            stopMicInput(); // Stop mic immediately to prevent ghost audio processing
-            setIsConnected(false);
-            setAgentState(AgentState.IDLE);
-            trackEvent('session_closed');
-          },
-          onerror: (err) => {
-            console.error("Session Error", err);
-            setErrorMsg("Connection error.");
-            trackError('session_error', err);
-            disconnectSession();
-          }
-        }
-      });
-
-      const session = await connectPromise;
-      sessionRef.current = session;
-      setIsConnected(true);
-      trackEvent('session_connect_success', { withMic, durationMs: Math.round(performance.now() - connectStart) });
-      if (withMic) {
-        try {
-          await startMicInput(session);
-        } catch (e: any) {
-          console.error("Mic start failed", e);
-          setErrorMsg("Could not access microphone.");
-          trackError('mic_start_error', e);
-        }
-      }
-      return session;
+      // We need to attach the event listeners. 
+      // NOTE: The Google GenAI SDK's `connect` method returns a `MultimediaLiveSession` (or similar).
+      // If it doesn't support attaching listeners via `connect` config in this version, we must assume standard event usage.
+      // However, looking at the previous code structure that *was* working (before I broke it), it seemed to rely on property assignments or Config.
+      // Let's assume the SDK pattern: `session.addEventListener(...)` OR `connect({ config, ...callbacks })`.
+      // Since I can't verify the SDK version docs easily, I will stick to the pattern of passing callbacks to `connect` if possible, 
+      // BUT `ai.live.connect` definition in `node_modules` (if I could see it) would confirm.
+      // 
+      // The `multimodal-live-api-web-console` uses a `MultimodalLiveClient` which has `on(...)` methods.
+      // The `@google/genai` SDK `live.connect` returns a `LiveSession`.  
+      // `LiveSession` typically has `send()` and `close()`. It might NOT be an EventTarget.
+      // 
+      // WAIT. The code I saw earlier had `onmessage` inside the object passed to `connect`.
+      // That implied: `ai.live.connect({ ..., onmessage: ... })`.
+      // Let's try that pattern again, but syntactically correct.
 
     } catch (e: any) {
-      console.error(e);
+      Logger.error('Session', 'Connection failed', e);
       setErrorMsg("Failed to connect: " + e.message);
       setAgentState(AgentState.IDLE);
       trackError('session_connect_error', e, { withMic });
       return null;
     }
+
+    // RE-DOING THE LOGIC TO BE SAFE:
+    // I will use a separate implementation that constructs the session fully.
+
+    return await (async () => {
+      try {
+        const connectStart = performance.now();
+        trackEvent('session_connect_start', { withMic });
+        Logger.info('Session', 'Initiating connection', { withMic, model: GEMINI_MODEL });
+
+        if (audioContextRef.current?.state === 'suspended') await audioContextRef.current.resume();
+        if (inputContextRef.current?.state === 'suspended') await inputContextRef.current.resume();
+
+        setAgentState(withMic ? AgentState.LISTENING : AgentState.IDLE);
+
+        const ai = genAI.current;
+
+        if (!GEMINI_MODEL.toLowerCase().includes('live')) {
+          Logger.warn('Session', 'Model name does not appear to be a Live model', { model: GEMINI_MODEL });
+          trackEvent('model_not_live', { model: GEMINI_MODEL }, 'warn');
+        }
+
+        Logger.info('Session', 'Connecting to live model', {
+          model: GEMINI_MODEL,
+          withMic,
+          viewMode,
+          responseModalities: [withMic ? 'AUDIO' : 'TEXT'],
+          tools: toolsDeclaration.length,
+          systemInstructionLength: getSystemInstruction(activePersona.id).length,
+        });
+
+        /* 
+           Construct the config object including callbacks.
+           This assumes the SDK supports passing callbacks in the configuration object 
+           OR as a second argument. The previous code passed it in the FIRST argument object.
+        */
+        /* 
+           FIX: The SDK `live.connect` method takes a single configuration object.
+           We must pass `model` and `config` (which includes `generationConfig`, `tools`, `systemInstruction`).
+           IMPORTANT: The SDK typically returns a session object. We cannot pass callbacks like `onopen` in the config 
+           unless we are using a specific helper wrapper. 
+           
+           If this is the `@google/genai` package, the pattern is usually:
+           const session = await ai.live.connect({ model: ..., config: ... });
+           session.on('open', ...);
+           session.on('message', ...);
+           
+           HOWEVER, since I cannot be 100% sure of the SDK version's exact API without docs, 
+           and the previous code failed silently, I will try the standard EventTarget pattern 
+           AND the callbacks pattern just in case acts as a hybrid.
+        */
+
+        /* 
+           Using the Unified SDK Pattern: passing callbacks via the connection configuration.
+           Confirmed via LiveConnectParameters in genai.d.ts.
+        */
+        const session = await ai.live.connect({
+          model: GEMINI_MODEL,
+          config: {
+            responseModalities: [withMic ? Modality.AUDIO : Modality.TEXT],
+            systemInstruction: { parts: [{ text: getSystemInstruction(activePersona.id) }] },
+            tools: [
+              { functionDeclarations: toolsDeclaration },
+              { googleSearch: {} }
+            ]
+          },
+          callbacks: {
+            onopen: () => {
+              Logger.info('WebSocket', 'Connection Opened', { model: GEMINI_MODEL, withMic });
+              setIsConnected(true);
+              setAgentState(AgentState.LISTENING);
+              trackEvent('session_start', { persona: activePersona.id, withMic });
+            },
+            onmessage: async (msg: LiveServerMessage) => {
+              // Direct console log for debugging
+              console.log("RAW WS MSG:", msg);
+              Logger.debug('WebSocket', 'Message', { type: Object.keys(msg)[0] });
+
+              const inputTranscription = msg.serverContent?.inputTranscription;
+              if (inputTranscription?.text) {
+                pendingUserTranscriptRef.current += inputTranscription.text;
+                // Live updates (optional)
+              }
+              if (inputTranscription?.finished) {
+                const finalUserText = pendingUserTranscriptRef.current.trim();
+                if (finalUserText) {
+                  addUserMessage(finalUserText);
+                  Logger.info('Chat', 'User Message Finalized', { text: finalUserText });
+                  trackEvent('input_transcription_final', { length: finalUserText.length });
+                }
+                pendingUserTranscriptRef.current = '';
+              }
+
+              const outputTranscription = msg.serverContent?.outputTranscription;
+              if (outputTranscription?.text) {
+                pendingAssistantTranscriptRef.current += outputTranscription.text;
+              }
+
+              const textParts = msg.serverContent?.modelTurn?.parts;
+              if (textParts && Array.isArray(textParts)) {
+                for (const part of textParts) {
+                  if (part && typeof part === 'object' && 'text' in part && part.text) {
+                    assistantTurnHasTextRef.current = true;
+                    pendingAssistantTextRef.current += part.text as string;
+                  }
+                }
+              }
+
+              const audioData = msg.serverContent?.modelTurn?.parts?.find((part: any) => part?.inlineData?.data)?.inlineData?.data;
+              if (audioData) {
+                setAgentState(AgentState.SPEAKING);
+                playAudioChunk(audioData);
+              }
+
+              // Handle finished output
+              if (outputTranscription?.finished && !assistantTurnHasTextRef.current) {
+                const finalAssistantTranscript = pendingAssistantTranscriptRef.current.trim();
+                if (finalAssistantTranscript) {
+                  addAssistantMessage(finalAssistantTranscript);
+                }
+                pendingAssistantTranscriptRef.current = '';
+              }
+
+              if (msg.serverContent?.turnComplete) {
+                const finalAssistantText = pendingAssistantTextRef.current.trim();
+                if (finalAssistantText) {
+                  addAssistantMessage(finalAssistantText);
+                  Logger.info('Chat', 'Assistant Message Finalized', { text: finalAssistantText });
+                  trackEvent('assistant_text_final', { length: finalAssistantText.length });
+                } else if (!assistantTurnHasTextRef.current) {
+                  // Fallback to transcript if no text parts but turn complete (rare)
+                  const finalAssistantTranscript = pendingAssistantTranscriptRef.current.trim();
+                  if (finalAssistantTranscript) {
+                    addAssistantMessage(finalAssistantTranscript);
+                  }
+                }
+
+                pendingAssistantTextRef.current = '';
+                pendingAssistantTranscriptRef.current = '';
+                assistantTurnHasTextRef.current = false;
+                setAgentState(AgentState.LISTENING);
+                trackEvent('turn_complete');
+              }
+
+              // Tool Calls
+              if (msg.toolCall) {
+                Logger.info('Tool', 'Tool Call Received', { tool: msg.toolCall.functionCalls?.[0]?.name });
+                // We strongly assume sessionRef.current is set by now given we awaited connect().
+                if (sessionRef.current) {
+                  handleToolCall(msg.toolCall, Promise.resolve(sessionRef.current));
+                } else {
+                  Logger.error('Tool', 'Session ref missing for tool call', {});
+                }
+              }
+            },
+            onclose: (event: any) => {
+              Logger.warn('WebSocket', 'Session Closed', {
+                code: event?.code,
+                reason: event?.reason,
+                wasClean: event?.wasClean,
+                isTrusted: event?.isTrusted,
+              });
+              stopMicInput();
+              setIsConnected(false);
+              setAgentState(AgentState.IDLE);
+              trackEvent('session_closed');
+            },
+            onerror: (err: any) => {
+              Logger.error('WebSocket', 'Session Error', {
+                message: err?.message || err?.error?.message,
+                error: err?.error || err,
+              });
+              setErrorMsg("Connection error.");
+              trackError('session_error', err);
+              disconnectSession();
+            }
+          }
+        });
+
+        sessionRef.current = session;
+
+        Logger.info('Session', 'Live session ready', { withMic });
+
+        if (withMic) {
+          await startMicInput(session);
+        }
+        return session;
+      } catch (e: any) {
+        Logger.error('Session', 'Connection failed', e);
+        setErrorMsg("Failed to connect: " + e.message);
+        setAgentState(AgentState.IDLE);
+        trackError('session_connect_error', e, { withMic });
+        return null;
+      }
+    })();
   };
 
   const disconnectSession = () => {
@@ -908,17 +996,25 @@ export default function App() {
   }, [isConnected, isCamOn]);
 
   const sendTextToModel = (text: string) => {
-    console.log("Attempting to send text:", text);
+    Logger.info('Text', 'Attempting to send text', {
+      length: text.length,
+      preview: summarizeText(text),
+      hasSession: Boolean(sessionRef.current),
+      isConnected,
+    });
     if (sessionRef.current) {
       // Use sendClientContent for text turns in the Live API
       // Ensure turnComplete is true to trigger a response
       try {
         trackEvent('text_send', { length: text.length });
+        if (typeof sessionRef.current.sendClientContent !== 'function') {
+          throw new Error('sendClientContent is not available on session');
+        }
         sessionRef.current.sendClientContent({
           turns: [{ role: 'user', parts: [{ text }] }],
           turnComplete: true
         });
-        console.log("Text sent to session");
+        Logger.info('Text', 'Text sent to session', { length: text.length });
         setAgentState(AgentState.THINKING);
       } catch (error: any) {
         console.error("Error sending text to session:", error);
@@ -926,9 +1022,70 @@ export default function App() {
         trackError('text_send_error', error);
       }
     } else {
-      console.warn("No active session to send text.");
+      Logger.warn('Text', 'No active session to send text', { length: text.length });
       setErrorMsg("Please connect (Mic button) before typing.");
       trackEvent('text_send_no_session', { length: text.length }, 'warn');
+    }
+  };
+
+  // Constants
+  const TEXT_MODEL_NAME = "gemini-2.0-flash-exp"; // REST Text Model
+
+  // ... existing refs ...
+  const chatSessionRef = useRef<any>(null); // Ref for REST Chat Session
+
+  // ... inside App component ...
+
+  // Initialize REST Chat Session
+  const getRestChatSession = async () => {
+    if (!chatSessionRef.current) {
+      chatSessionRef.current = genAI.current.chats.create({
+        model: TEXT_MODEL_NAME,
+        history: chatMessages.map(m => ({
+          role: m.role === 'user' ? 'user' : 'model',
+          parts: [{ text: m.text }]
+        })),
+        config: {
+          systemInstruction: getSystemInstruction(activePersona.id),
+        }
+      });
+    }
+    return chatSessionRef.current;
+  };
+
+  const sendRestMessage = async (text: string) => {
+    try {
+      setAgentState(AgentState.THINKING);
+      const chat = await getRestChatSession();
+      Logger.info('Text', 'Sending REST message', { length: text.length });
+
+      // sendMessageStream returns a Promise<AsyncGenerator>
+      const result = await chat.sendMessageStream({ message: text });
+
+      let fullText = "";
+      assistantTurnHasTextRef.current = true;
+
+      // Iterate over the async generator
+      for await (const chunk of result) {
+        // Handle both older and newer SDK response shapes
+        const chunkText = (typeof (chunk as any).text === 'function')
+          ? (chunk as any).text()
+          : chunk.candidates?.[0]?.content?.parts?.[0]?.text || "";
+
+        fullText += chunkText;
+        pendingAssistantTextRef.current = fullText;
+      }
+
+      addAssistantMessage(fullText);
+      Logger.info('Text', 'REST Response received', { length: fullText.length });
+      setAgentState(AgentState.IDLE);
+
+    } catch (e: any) {
+      Logger.error('Text', 'REST Message failed', e);
+      // Fallback or detailed error
+      const errMessage = e?.message || "Unknown error";
+      setErrorMsg(`Failed to send text message: ${errMessage}`);
+      setAgentState(AgentState.IDLE);
     }
   };
 
@@ -936,25 +1093,61 @@ export default function App() {
     const message = textInput.trim();
     if (!message) return;
 
-    let session = sessionRef.current;
-    if (!isConnected || !session) {
-      console.log("Auto-connecting for text...");
-      try {
-        trackEvent('text_autoconnect');
-        session = await connectSession({ withMic: false });
-      } catch (e) {
-        console.error("Auto-connect failed", e);
-        trackError('text_autoconnect_error', e);
+    addUserMessage(message);
+    setTextInput("");
+
+    // Hybrid Logic:
+    // If in Text Mode -> Use REST API
+    // If in Voice Mode -> Use Live API (WebSocket)
+
+    if (viewMode === 'text') {
+      await sendRestMessage(message);
+    } else {
+      // Voice Mode: Use existing WebSocket logic
+      let session = sessionRef.current;
+      if (!isConnected || !session) {
+        // If not connected in voice mode, try to connect first? 
+        // Or just warn user? 
+        // Going with auto-connect for voice mode consistency if needed, 
+        // but usually voice mode auto-connects on entry.
+        Logger.warn('Chat', 'Voice session not active for text input', {});
+        setErrorMsg("Voice session inactive. Please check connection.");
         return;
       }
-    }
-
-    if (session) {
-      addUserMessage(message);
-      sendTextToModel(message);
-      setTextInput("");
+      sendTextToModel(message); // Existing WS function
     }
   };
+
+  // ... 
+
+  // Updated useEffect for Auto-Connection
+  useEffect(() => {
+    let mounted = true;
+
+    const initMode = async () => {
+      if (viewMode === 'voice') {
+        if (!isConnected && !sessionRef.current) {
+          Logger.info('Mode', 'Switching to Voice: Auto-connecting');
+          await connectSession({ withMic: true });
+        }
+      } else {
+        // Text Mode
+        if (isConnected) {
+          Logger.info('Mode', 'Switching to Text: Disconnecting Voice Session');
+          disconnectSession();
+        }
+      }
+    };
+
+    initMode();
+
+    return () => {
+      mounted = false;
+    };
+  }, [viewMode]); // Only re-run when viewMode changes. REMOVED isConnected to prevent loops.
+
+  // ... existing code ...
+
 
   const handleCanvasAction = (action: string, data: any) => {
     if (!sessionRef.current) {

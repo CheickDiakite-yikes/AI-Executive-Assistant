@@ -1,7 +1,7 @@
 
 import { AgentPersona } from './types';
 
-export const GEMINI_MODEL = 'gemini-2.5-flash-native-audio-preview-09-2025';
+export const GEMINI_MODEL = "gemini-2.5-flash-native-audio-preview-12-2025";
 
 export const PERSONAS: AgentPersona[] = [
   {
@@ -165,11 +165,11 @@ CRITICAL RULES:
 `;
 
 export const getSystemInstruction = (personaId: string) => {
-  switch(personaId) {
+  switch (personaId) {
     case 'atlas': return ATLAS_INSTRUCTION;
     case 'nova': return NOVA_INSTRUCTION;
     case 'zorra': return ZORRA_INSTRUCTION;
-    case 'maya': 
+    case 'maya':
     default: return MAYA_INSTRUCTION;
   }
 };
