@@ -2,6 +2,7 @@
 import { AgentPersona } from './types';
 
 export const GEMINI_MODEL = "gemini-2.5-flash-native-audio-preview-12-2025";
+export const GEMINI_TEXT_MODEL = "gemini-3-flash-preview";
 
 export const PERSONAS: AgentPersona[] = [
   {

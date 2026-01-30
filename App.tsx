@@ -10,7 +10,7 @@ import TextChat from './components/TextChat';
 import { CanvasItem, AgentState, AgentPersona, Note, ChatMessage } from './types';
 import { getPathForViewMode, getViewModeFromPath } from './utils/routing';
 import { trackEvent, trackError, trackToolExecution } from './utils/telemetry';
-import { GEMINI_MODEL, PERSONAS, getSystemInstruction } from './constants';
+import { GEMINI_MODEL, GEMINI_TEXT_MODEL, PERSONAS, getSystemInstruction } from './constants';
 import { toolsDeclaration, DUMMY_EMAILS, DUMMY_CALENDAR, generateMarketData } from './services/tools';
 import { api } from './services/api';
 import Logger from './utils/logger';
@@ -1002,34 +1002,36 @@ export default function App() {
       hasSession: Boolean(sessionRef.current),
       isConnected,
     });
-    if (sessionRef.current) {
-      // Use sendClientContent for text turns in the Live API
-      // Ensure turnComplete is true to trigger a response
+
+    if (sessionRef.current && isConnected) {
+      // Use sendClientContent for text turns in the Live API if connected
       try {
         trackEvent('text_send', { length: text.length });
         if (typeof sessionRef.current.sendClientContent !== 'function') {
+          // If somehow connected but function missing (rare), fallback?
+          // No, better to error if we think we are connected.
           throw new Error('sendClientContent is not available on session');
         }
         sessionRef.current.sendClientContent({
           turns: [{ role: 'user', parts: [{ text }] }],
           turnComplete: true
         });
-        Logger.info('Text', 'Text sent to session', { length: text.length });
+        Logger.info('Text', 'Text sent to Live session', { length: text.length });
         setAgentState(AgentState.THINKING);
       } catch (error: any) {
         console.error("Error sending text to session:", error);
-        setErrorMsg("Failed to send text. Ensure connection is active.");
+        setErrorMsg("Failed to send text to live session.");
         trackError('text_send_error', error);
       }
     } else {
-      Logger.warn('Text', 'No active session to send text', { length: text.length });
-      setErrorMsg("Please connect (Mic button) before typing.");
-      trackEvent('text_send_no_session', { length: text.length }, 'warn');
+      // Fallback to Independent Text Chat (Gemini 3 Flash)
+      Logger.info('Text', 'No active live session, using Gemini 3 Flash', { length: text.length });
+      sendRestMessage(text);
     }
   };
 
   // Constants
-  const TEXT_MODEL_NAME = "gemini-2.0-flash-exp"; // REST Text Model
+  const TEXT_MODEL_NAME = GEMINI_TEXT_MODEL; // REST Text Model
 
   // ... existing refs ...
   const chatSessionRef = useRef<any>(null); // Ref for REST Chat Session
