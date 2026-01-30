@@ -241,12 +241,21 @@ export default function App() {
         }
 
         const base64Data = arrayBufferToBase64(pcmData.buffer);
-        session.sendRealtimeInput({
-          media: {
-            mimeType: 'audio/pcm;rate=16000',
-            data: base64Data
+        try {
+          session.sendRealtimeInput({
+            media: {
+              mimeType: 'audio/pcm;rate=16000',
+              data: base64Data
+            }
+          });
+        } catch (e) {
+          // Silent catch for "CLOSING or CLOSED" errors to prevent console spam
+          // This happens when mic is still active but session closed
+          if (String(e).includes("CLOSING") || String(e).includes("CLOSED")) {
+            return;
           }
-        });
+          console.warn("Error sending audio frame:", e);
+        }
       };
 
       source.connect(processor);
@@ -410,7 +419,7 @@ export default function App() {
           },
           onclose: () => {
             console.log("Session Closed");
-            stopMicInput();
+            stopMicInput(); // Stop mic immediately to prevent ghost audio processing
             setIsConnected(false);
             setAgentState(AgentState.IDLE);
             trackEvent('session_closed');
