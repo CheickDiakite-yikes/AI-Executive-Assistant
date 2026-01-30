@@ -187,31 +187,17 @@ export default function App() {
   }, [isAudioMuted]);
 
   useEffect(() => {
-    // Determine if we should connect based on viewMode
-    // For now, let's always try to connect on load or mode change if not connected
-    const shouldConnect = true;
-
-    if (shouldConnect && !isConnected && !errorMsg) {
-      // Auto-connect
-      const withMic = viewMode === 'voice';
-      connectSession({ withMic });
-    }
+    // PRIVACY: Do NOT auto-connect or auto-start mic on page load.
+    // User must explicitly click the mic button to start listening.
+    // This useEffect only manages state transitions when viewMode changes.
 
     if (viewMode === 'text') {
       stopMicInput();
-      // Don't disconnect session, just stop mic.
-      // But we need to ensure agent isn't listening if we want push-to-talk or text only
       setAgentState(AgentState.IDLE);
-    } else if (viewMode === 'voice' && isConnected && sessionRef.current && !streamRef.current) {
-      // If switched to voice and already connected but no mic, start mic
-      startMicInput(sessionRef.current)
-        .then(() => setAgentState(AgentState.LISTENING))
-        .catch((e: any) => {
-          console.error("Mic start failed", e);
-          setErrorMsg("Could not access microphone.");
-        });
     }
-  }, [viewMode, isConnected, errorMsg]);
+    // Note: We no longer auto-start mic when switching to voice mode.
+    // The user must click the mic button to activate listening.
+  }, [viewMode]);
 
   const stopMicInput = () => {
     if (sourceRef.current) sourceRef.current.disconnect();
@@ -526,11 +512,11 @@ export default function App() {
           if (!email) {
             email = DUMMY_EMAILS.find(e => e.from.toLowerCase().includes(args.query.toLowerCase()) || e.subject.toLowerCase().includes(args.query.toLowerCase())) || DUMMY_EMAILS[0];
           }
-            addCanvasItem({ type: 'email', title: email.subject, content: email, id: id, timestamp: Date.now() });
-            result = { 
-                result: `Displayed email from ${email.from}.`,
-                email_content: {
-                    from: email.from,
+          addCanvasItem({ type: 'email', title: email.subject, content: email, id: id, timestamp: Date.now() });
+          result = {
+            result: `Displayed email from ${email.from}.`,
+            email_content: {
+              from: email.from,
               subject: email.subject,
               body: email.body,
               date: "Today, 10:42 AM"
@@ -538,62 +524,62 @@ export default function App() {
           };
         }
         else if (name === 'draft_email') {
-            try {
-              await api.email.draft(args.recipient, args.subject, args.body);
-            } catch (e) {
-              trackError('email_draft_error', e, { recipient: args.recipient });
-            }
-            addCanvasItem({ 
-               type: 'email-draft', 
-               title: "Drafting Email...", 
-               content: { recipient: args.recipient, subject: args.subject, body: args.body }, 
-               id: id, 
-               timestamp: Date.now() 
+          try {
+            await api.email.draft(args.recipient, args.subject, args.body);
+          } catch (e) {
+            trackError('email_draft_error', e, { recipient: args.recipient });
+          }
+          addCanvasItem({
+            type: 'email-draft',
+            title: "Drafting Email...",
+            content: { recipient: args.recipient, subject: args.subject, body: args.body },
+            id: id,
+            timestamp: Date.now()
           });
           // Inform model it was displayed
           result = { result: "Draft displayed on canvas. Ask user for confirmation to send." };
         }
         else if (name === 'send_email') {
-            try {
-              await api.email.send(args.recipient, args.subject, args.body);
-            } catch (e) {
-              trackError('email_send_error', e, { recipient: args.recipient });
-              throw e;
-            }
-            result = { result: `Email sent successfully to ${args.recipient}.` };
+          try {
+            await api.email.send(args.recipient, args.subject, args.body);
+          } catch (e) {
+            trackError('email_send_error', e, { recipient: args.recipient });
+            throw e;
+          }
+          result = { result: `Email sent successfully to ${args.recipient}.` };
         }
         else if (name === 'display_calendar') {
-            let events = [];
-            try {
-              events = await api.calendar.list();
-            } catch (e) {
-              trackError('calendar_list_error', e);
-            }
-            const calendarEvents = events.length ? events : DUMMY_CALENDAR;
-            addCanvasItem({ type: 'calendar', title: "Today's Schedule", content: calendarEvents, id: id, timestamp: Date.now() });
-            
-            // CRITICAL: Return the actual calendar data AND current time to the model so it can reason about availability
-            const now = new Date();
-            result = { 
-                result: "Calendar displayed.",
-                current_date: now.toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' }),
-                current_time: now.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' }),
-                time_zone: Intl.DateTimeFormat().resolvedOptions().timeZone,
-                events: calendarEvents 
-            };
+          let events = [];
+          try {
+            events = await api.calendar.list();
+          } catch (e) {
+            trackError('calendar_list_error', e);
+          }
+          const calendarEvents = events.length ? events : DUMMY_CALENDAR;
+          addCanvasItem({ type: 'calendar', title: "Today's Schedule", content: calendarEvents, id: id, timestamp: Date.now() });
+
+          // CRITICAL: Return the actual calendar data AND current time to the model so it can reason about availability
+          const now = new Date();
+          result = {
+            result: "Calendar displayed.",
+            current_date: now.toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' }),
+            current_time: now.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' }),
+            time_zone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+            events: calendarEvents
+          };
         }
         else if (name === 'schedule_event') {
-            let updatedEvents = null;
-            try {
-              const response = await api.calendar.schedule({ title: args.title, time: args.time, participants: args.participants });
-              updatedEvents = response?.events || null;
-            } catch (e) {
-              trackError('calendar_schedule_error', e, { title: args.title });
-            }
-            const newEvent = { title: args.title, time: args.time, location: "TBD", participants: [args.participants || "User"] };
-            const events = updatedEvents || [...DUMMY_CALENDAR, newEvent];
-            addCanvasItem({ type: 'calendar', title: "Event Scheduled", content: events, id: id, timestamp: Date.now() });
-            result = { result: `Scheduled ${args.title} at ${args.time}` };
+          let updatedEvents = null;
+          try {
+            const response = await api.calendar.schedule({ title: args.title, time: args.time, participants: args.participants });
+            updatedEvents = response?.events || null;
+          } catch (e) {
+            trackError('calendar_schedule_error', e, { title: args.title });
+          }
+          const newEvent = { title: args.title, time: args.time, location: "TBD", participants: [args.participants || "User"] };
+          const events = updatedEvents || [...DUMMY_CALENDAR, newEvent];
+          addCanvasItem({ type: 'calendar', title: "Event Scheduled", content: events, id: id, timestamp: Date.now() });
+          result = { result: `Scheduled ${args.title} at ${args.time}` };
         }
         else if (name === 'generate_code') {
           addCanvasItem({ type: 'code', title: args.description, content: { code: args.code, language: args.language }, id: id, timestamp: Date.now() });
@@ -669,12 +655,12 @@ export default function App() {
             const tag = args.tag.toLowerCase();
             found = notesRef.current.filter(n => n.tags?.some(t => t.toLowerCase() === tag));
           }
-          
+
           addCanvasItem({
-              type: 'note-search-results',
-              title: `Notes: #${args.tag}`,
-              content: { tag: args.tag, notes: found },
-              id: id,
+            type: 'note-search-results',
+            title: `Notes: #${args.tag}`,
+            content: { tag: args.tag, notes: found },
+            id: id,
             timestamp: Date.now()
           });
 
@@ -718,10 +704,10 @@ export default function App() {
             marketData = generateMarketData(args.ticker);
           }
           addCanvasItem({
-              type: 'financial-ticker',
-              title: `Market Pulse: ${args.ticker.toUpperCase()}`,
-              content: marketData,
-              id: id,
+            type: 'financial-ticker',
+            title: `Market Pulse: ${args.ticker.toUpperCase()}`,
+            content: marketData,
+            id: id,
             timestamp: Date.now()
           });
           result = { result: `Displayed market data for ${args.ticker}` };
